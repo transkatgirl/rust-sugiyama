@@ -310,6 +310,71 @@ mod check_visuals {
     }
 
     #[test]
+    fn test_per_pair_separation() {
+        // a 5-rank chain 0-1-2-3-4 forming one tall block that contains the
+        // wide vertex 2, plus vertex 5 sharing a rank with the narrow chain
+        // member 1
+        let vertices: [(u32, (f64, f64)); 6] = [
+            (0, (10.0, 10.0)),
+            (1, (10.0, 10.0)),
+            (2, (200.0, 10.0)),
+            (3, (10.0, 10.0)),
+            (4, (10.0, 10.0)),
+            (5, (10.0, 10.0)),
+        ];
+        let edges = [(0, 1), (1, 2), (2, 3), (3, 4), (0, 5)];
+
+        // lays out the graph, checks that vertices sharing a rank don't
+        // overlap horizontally, and returns the layout's geometric width
+        let run = |per_pair_separation: bool| {
+            let layouts = from_vertices_and_edges(
+                &vertices,
+                &edges,
+                &Config {
+                    per_pair_separation,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(layouts.len(), 1);
+            let (layout, _, _) = layouts.into_iter().next().unwrap();
+            assert_eq!(layout.len(), 6);
+
+            // width of each vertex as phase 3 sees it: the input width plus
+            // the default vertex spacing
+            let width = |id: usize| vertices[id].1 .0 + 10.0;
+
+            let mut entries = layout;
+            entries.sort_by(|(_, (ax, ay)), (_, (bx, by))| {
+                (ay, ax).partial_cmp(&(by, bx)).unwrap()
+            });
+            for pair in entries.windows(2) {
+                let (a, (ax, ay)) = pair[0];
+                let (b, (bx, by)) = pair[1];
+                if ay == by {
+                    assert!(bx - ax >= (width(a) + width(b)) * 0.5 - 1e-9);
+                }
+            }
+
+            let left = entries
+                .iter()
+                .map(|(v, (x, _))| x - width(*v) * 0.5)
+                .fold(f64::INFINITY, f64::min);
+            let right = entries
+                .iter()
+                .map(|(v, (x, _))| x + width(*v) * 0.5)
+                .fold(f64::NEG_INFINITY, f64::max);
+            right - left
+        };
+
+        let block_max_width = run(false);
+        let per_pair_width = run(true);
+        assert!(
+            per_pair_width < block_max_width,
+            "per-pair layout ({per_pair_width}) should be narrower than block-max ({block_max_width})"
+        );
+    }
+
+    #[test]
     fn test_divide_components_disabled_disconnected() {
         // two components; the default ranking type requires a connected
         // graph, so use one that supports disconnected input

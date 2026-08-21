@@ -5,6 +5,7 @@ This is a fork of the [rust-sugiyama](https://crates.io/crates/rust-sugiyama) cr
 - Minor improvements to coordinate assignment
 - Added CrossingMinimization::None
 - Added Config::divide_components
+- Added Config::per_pair_separation
 
 The remainder of this README is copied from `rust-sugiyama`.
 
@@ -141,3 +142,4 @@ Environment variables that can be set are:
 | RUST_GRAPH_TRANSPOSE  | (y\|n)                       | y          | if transpose function is used to further try to reduce crossings (may increase runtime significally for large graphs) |
 | RUST_GRAPH_DUMMY_SIZE | float, > 0                  | 1.0        | absolute width of dummy vertices, if dummy vertices are included. small values squish the graph horizontally |
 | RUST_GRAPH_DIVIDE_COMPONENTS | (y\|n)               | y          | if the graph is divided into its connected components before layout. if disabled, the default ranking type requires a connected graph |
+| RUST_GRAPH_PER_PAIR_SEPARATION | (y\|n)             | n          | if adjacent vertices are separated based on each pair's own widths instead of the maximum vertex width of their blocks. produces tighter layouts |

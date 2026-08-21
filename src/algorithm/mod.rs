@@ -50,7 +50,7 @@ pub(super) struct Vertex {
     align: NodeIndex,
     shift: f64,
     sink: NodeIndex,
-    block_max_vertex_width: f64,
+    separation_width: f64,
 }
 
 impl Vertex {
@@ -79,7 +79,7 @@ impl Default for Vertex {
             align: 0.into(),
             shift: f64::INFINITY,
             sink: 0.into(),
-            block_max_vertex_width: 0.0,
+            separation_width: 0.0,
         }
     }
 }
@@ -171,7 +171,7 @@ fn build_layout(mut graph: StableDiGraph<Vertex, Edge>, config: &Config) -> Layo
         config.transpose,
     );
 
-    let layout = execute_phase_3(&mut graph, layers);
+    let layout = execute_phase_3(&mut graph, layers, config.per_pair_separation);
     debug!(target: "layouting", "Coordinates: {:?}\nwidth: {}, height:{}",
         layout.0,
         layout.1,
@@ -223,6 +223,7 @@ fn execute_phase_2(
 fn execute_phase_3(
     graph: &mut StableDiGraph<Vertex, Edge>,
     mut layers: Vec<Vec<NodeIndex>>,
+    per_pair_separation: bool,
 ) -> Layout {
     info!(target: "layouting", "Executing phase 3: Coordinate Calculation");
     for n in graph.node_indices().collect::<Vec<_>>() {
@@ -237,7 +238,7 @@ fn execute_phase_3(
     // recorded, so the rest of the phase can rely on every layer being
     // occupied
     layers.retain(|l| !l.is_empty());
-    let mut layouts = p3::create_layouts(graph, &mut layers);
+    let mut layouts = p3::create_layouts(graph, &mut layers, per_pair_separation);
 
     p3::align_to_smallest_width_layout(graph, &mut layouts);
     let mut x_coordinates = p3::calculate_relative_coords(layouts);

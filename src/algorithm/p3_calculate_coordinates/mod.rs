@@ -13,6 +13,7 @@ use super::{slack, Edge, Vertex};
 pub(super) fn create_layouts(
     graph: &mut StableDiGraph<Vertex, Edge>,
     layers: &mut [Vec<NodeIndex>],
+    per_pair_separation: bool,
 ) -> Vec<HashMap<NodeIndex, f64>> {
     info!(target: "coordinate_calculation", "Creating individual layouts for coordinate calculation");
     let mut layouts = Vec::new();
@@ -31,7 +32,7 @@ pub(super) fn create_layouts(
 
             reset_alignment(graph, layers);
             create_vertical_alignments(graph, layers);
-            let mut layout = do_horizontal_compaction(graph, layers);
+            let mut layout = do_horizontal_compaction(graph, layers, per_pair_separation);
             // flip x_coordinates if we went from right to left
             if let HDir::Left = h_dir {
                 layout.values_mut().for_each(|x| *x = -*x);
@@ -270,9 +271,10 @@ fn create_vertical_alignments(
 fn do_horizontal_compaction(
     graph: &mut StableDiGraph<Vertex, Edge>,
     layers: &[Vec<NodeIndex>],
+    per_pair_separation: bool,
 ) -> HashMap<NodeIndex, f64> {
     info!(target: "coordinate_calculation", "calculating coordinates for layout.");
-    compute_block_max_vertex_widths(graph);
+    compute_separation_widths(graph, per_pair_separation);
 
     let mut x_coordinates = place_blocks(graph, layers);
     // calculate class shifts
@@ -296,9 +298,7 @@ fn do_horizontal_compaction(
 
                     if graph[v].pos > 0 {
                         let u = pred(graph[v], layers);
-                        let gap = (graph[v].block_max_vertex_width
-                            + graph[u].block_max_vertex_width)
-                            * 0.5;
+                        let gap = (graph[v].separation_width + graph[u].separation_width) * 0.5;
                         let distance_v_u = *x_coordinates.get(&v).unwrap()
                             - (*x_coordinates.get(&u).unwrap() + gap);
                         let u_sink = graph[u].sink;
@@ -326,9 +326,17 @@ fn do_horizontal_compaction(
     x_coordinates
 }
 
-/// Computes the maximum width of the vertices in each block and assigns the
-/// width to [Vertex::block_max_vertex_width] of each vertex in the block.
-fn compute_block_max_vertex_widths(graph: &mut StableDiGraph<Vertex, Edge>) {
+/// Assigns [Vertex::separation_width], the width used when separating a
+/// vertex from its neighbors on the same layer: the maximum width of the
+/// vertices in the vertex's block, or the vertex's own width if
+/// `per_pair_separation` is enabled.
+fn compute_separation_widths(graph: &mut StableDiGraph<Vertex, Edge>, per_pair_separation: bool) {
+    if per_pair_separation {
+        for v in graph.node_indices().collect::<Vec<_>>() {
+            graph[v].separation_width = graph[v].size.0;
+        }
+        return;
+    }
     for root in graph
         .node_indices()
         .filter(|v| graph[*v].root == *v)
@@ -346,12 +354,12 @@ fn compute_block_max_vertex_widths(graph: &mut StableDiGraph<Vertex, Edge>) {
         }
 
         let root_vertex = &mut graph[root];
-        root_vertex.block_max_vertex_width = max_vertex_width;
+        root_vertex.separation_width = max_vertex_width;
 
         current = root_vertex.align;
         while current != root {
             let current_vertex = &mut graph[current];
-            current_vertex.block_max_vertex_width = max_vertex_width;
+            current_vertex.separation_width = max_vertex_width;
             current = current_vertex.align;
         }
     }
@@ -386,15 +394,15 @@ fn place_block(
     let mut w = root;
     loop {
         if graph[w].pos > 0 {
-            let u = graph[pred(graph[w], layers)].root;
+            let pred_w = pred(graph[w], layers);
+            let u = graph[pred_w].root;
             place_block(graph, layers, u, x_coordinates);
             // initialize sink of current node to have the same sink as the root
             if graph[root].sink == root {
                 graph[root].sink = graph[u].sink;
             }
             if graph[root].sink == graph[u].sink {
-                let gap =
-                    (graph[root].block_max_vertex_width + graph[u].block_max_vertex_width) * 0.5;
+                let gap = (graph[w].separation_width + graph[pred_w].separation_width) * 0.5;
                 x_coordinates.insert(
                     root,
                     x_coordinates

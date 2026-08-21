@@ -355,12 +355,65 @@ fn create_layouts_marks_type_1_conflicts() {
         graph[v].pos = 0;
     }
 
-    let _ = super::create_layouts(&mut graph, &mut layers);
+    let _ = super::create_layouts(&mut graph, &mut layers, false);
 
     assert!(graph[graph.find_edge(6.into(), 8.into()).unwrap()].has_type_1_conflict);
     assert!(graph[graph.find_edge(7.into(), 12.into()).unwrap()].has_type_1_conflict);
     assert!(graph[graph.find_edge(5.into(), 8.into()).unwrap()].has_type_1_conflict);
     assert!(graph[graph.find_edge(9.into(), 22.into()).unwrap()].has_type_1_conflict);
+}
+
+#[test]
+fn per_pair_separation_places_blocks_tighter() {
+    // block A spans three ranks and contains one wide vertex (a1); block B is
+    // the single vertex b0, which shares a rank with only the narrow member a0
+    let build = || {
+        let mut graph = StableDiGraph::<Vertex, Edge>::new();
+        let a0 = graph.add_node(Vertex {
+            size: (10.0, 10.0),
+            ..Default::default()
+        });
+        let b0 = graph.add_node(Vertex {
+            size: (10.0, 10.0),
+            ..Default::default()
+        });
+        let a1 = graph.add_node(Vertex {
+            size: (100.0, 10.0),
+            ..Default::default()
+        });
+        let a2 = graph.add_node(Vertex {
+            size: (10.0, 10.0),
+            ..Default::default()
+        });
+        let layers = vec![vec![a0, b0], vec![a1], vec![a2]];
+        for (rank, row) in layers.iter().enumerate() {
+            for (pos, v) in row.iter().enumerate() {
+                graph[*v].rank = rank as i32;
+                graph[*v].pos = pos;
+                graph[*v].root = *v;
+                graph[*v].align = *v;
+                graph[*v].sink = *v;
+            }
+        }
+        graph[a0].align = a1;
+        graph[a1].align = a2;
+        graph[a2].align = a0;
+        graph[a1].root = a0;
+        graph[a2].root = a0;
+        (graph, layers, [a0, b0, a1, a2])
+    };
+
+    let (mut graph, layers, [a0, b0, _, _]) = build();
+    let x = super::do_horizontal_compaction(&mut graph, &layers, false);
+    // half the sum of the blocks' max widths: (100 + 10) / 2
+    assert_eq!(x[&b0] - x[&a0], 55.0);
+
+    let (mut graph, layers, [a0, b0, a1, a2]) = build();
+    let x = super::do_horizontal_compaction(&mut graph, &layers, true);
+    // only the widths of the adjacent pair (a0, b0) matter: (10 + 10) / 2
+    assert_eq!(x[&b0] - x[&a0], 10.0);
+    assert_eq!(x[&a0], x[&a1]);
+    assert_eq!(x[&a0], x[&a2]);
 }
 
 #[test]

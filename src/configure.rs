@@ -12,6 +12,7 @@ pub const C_MINIMIZATION_DEFAULT: CrossingMinimization = CrossingMinimization::B
 pub const TRANSPOSE_DEFAULT: bool = true;
 pub const DUMMY_SIZE_DEFAULT: f64 = 1.0;
 pub const DIVIDE_COMPONENTS_DEFAULT: bool = true;
+pub const PER_PAIR_SEPARATION_DEFAULT: bool = false;
 
 const ENV_MINIMUM_LENGTH: &str = "RUST_GRAPH_MIN_LEN";
 const ENV_VERTEX_SPACING: &str = "RUST_GRAPH_V_SPACING";
@@ -21,6 +22,7 @@ const ENV_CROSSING_MINIMIZATION: &str = "RUST_GRAPH_CROSS_MIN";
 const ENV_TRANSPOSE: &str = "RUST_GRAPH_TRANSPOSE";
 const ENV_DUMMY_SIZE: &str = "RUST_GRAPH_DUMMY_SIZE";
 const ENV_DIVIDE_COMPONENTS: &str = "RUST_GRAPH_DIVIDE_COMPONENTS";
+const ENV_PER_PAIR_SEPARATION: &str = "RUST_GRAPH_PER_PAIR_SEPARATION";
 
 pub trait IntoCoordinates {}
 
@@ -86,6 +88,19 @@ pub struct Config {
     /// [`RankingType::Original`]) also accept disconnected input, placing all
     /// components in one shared coordinate space.
     pub divide_components: bool,
+    /// Whether to separate each pair of horizontally adjacent vertices by the
+    /// average of their own widths, instead of the average of the maximum
+    /// vertex widths of their alignment blocks.
+    ///
+    /// With the default (`false`), every vertex of a block (a group of
+    /// vertices on consecutive layers that are aligned vertically) is spaced
+    /// as if it were as wide as the block's widest member, which keeps the
+    /// spacing between two blocks uniform but can make the layout wider than
+    /// necessary. When enabled, vertices are packed tighter; note that an edge
+    /// routed through dummy vertices may then pass close to a wide vertex (see
+    /// [`Self::dummy_size`]), and a narrow vertex on an adjacent layer may sit
+    /// horizontally within the span of a wide vertex.
+    pub per_pair_separation: bool,
 }
 
 impl Config {
@@ -103,6 +118,7 @@ impl Config {
     /// | RUST_GRAPH_TRANSPOSE  | y \| n               | y          | if transpose function is used to further try to reduce crossings (may increase runtime significally for large graphs) |
     /// | RUST_GRAPH_DUMMY_SIZE | float, > 0           | 1.0        | absolute width of dummy vertices, if dummy vertices are included. small values squish the graph horizontally |
     /// | RUST_GRAPH_DIVIDE_COMPONENTS | y \| n        | y          | if the graph is divided into its connected components before layout. if disabled, the default ranking type requires a connected graph |
+    /// | RUST_GRAPH_PER_PAIR_SEPARATION | y \| n      | n          | if adjacent vertices are separated based on each pair's own widths instead of the maximum vertex width of their blocks. produces tighter layouts |
     pub fn new_from_env() -> Self {
         let mut config = Self::default();
 
@@ -144,6 +160,12 @@ impl Config {
             ENV_DIVIDE_COMPONENTS
         );
 
+        read_env!(
+            config.per_pair_separation,
+            parse_bool,
+            ENV_PER_PAIR_SEPARATION
+        );
+
         config
     }
 }
@@ -159,6 +181,7 @@ impl Default for Config {
             transpose: TRANSPOSE_DEFAULT,
             dummy_size: DUMMY_SIZE_DEFAULT,
             divide_components: DIVIDE_COMPONENTS_DEFAULT,
+            per_pair_separation: PER_PAIR_SEPARATION_DEFAULT,
         }
     }
 }
@@ -251,6 +274,7 @@ fn from_env_all_valid() {
     env::set_var(ENV_TRANSPOSE, "n");
     env::set_var(ENV_VERTEX_SPACING, "20");
     env::set_var(ENV_DIVIDE_COMPONENTS, "n");
+    env::set_var(ENV_PER_PAIR_SEPARATION, "y");
     let cfg = Config::new_from_env();
     assert_eq!(cfg.minimum_length, 5);
     assert_eq!(cfg.dummy_vertices, true);
@@ -260,6 +284,7 @@ fn from_env_all_valid() {
     assert_eq!(cfg.transpose, false);
     assert_eq!(cfg.vertex_spacing, 20.0);
     assert_eq!(cfg.divide_components, false);
+    assert_eq!(cfg.per_pair_separation, true);
 }
 
 #[test]
