@@ -32,6 +32,12 @@ type Layouts<T> = Vec<(Vec<(T, (f64, f64))>, f64, f64)>;
 /// [`Config::vertex_spacing`]. To obtain the geometric bounding box of a
 /// subgraph, compute it from the returned coordinates (and, when using sized
 /// vertices, the vertex sizes).
+///
+/// # Self-loops
+///
+/// Edges whose tail and head are the same vertex cannot be drawn in a layered
+/// layout and are ignored: the vertex is laid out as if the edge did not
+/// exist.
 pub fn from_edges(edges: &[(u32, u32)], config: &Config) -> Layouts<usize> {
     info!(target: "initializing", "Creating new layout from edges, containing {} edges", edges.len());
     let graph = StableDiGraph::from_edges(edges);
@@ -45,7 +51,8 @@ pub fn from_edges(edges: &[(u32, u32)], config: &Config) -> Layouts<usize> {
 /// list of the [NodeIndex] and its x and y position respectively.
 ///
 /// The returned `width` and `height` are vertex and layer counts, not
-/// geometric extents; see [`from_edges`] for the exact semantics.
+/// geometric extents, and self-loops in `graph` are ignored; see
+/// [`from_edges`] for the exact semantics.
 pub fn from_graph<V, E>(
     graph: &StableDiGraph<V, E>,
     vertex_size: &impl Fn(NodeIndex, &V) -> (f64, f64),
@@ -80,8 +87,9 @@ pub fn from_graph<V, E>(
 ///
 /// The layouts are returned as a list of disjoint subgraphs containing the
 /// subgraph layout, the width, and the height. The returned `width` and
-/// `height` are vertex and layer counts, not geometric extents; see
-/// [`from_edges`] for the exact semantics.
+/// `height` are vertex and layer counts, not geometric extents, and
+/// self-loops in `edges` are ignored; see [`from_edges`] for the exact
+/// semantics.
 ///
 /// Note that the `usize` in each layout entry is **not** the vertex id given
 /// in `vertices`: it is the vertex's position in the `vertices` slice
@@ -125,6 +133,29 @@ fn run_algo_empty_graph() {
     let edges = [];
     let g = from_edges(&edges, &Config::default());
     assert!(g.is_empty());
+}
+
+// pins the documented self-loop semantics: the loop edge is ignored, the
+// vertex is still laid out
+#[test]
+fn run_algo_self_loop_only() {
+    let edges = [(0, 0)];
+    let layouts = from_edges(&edges, &Config::default());
+    assert_eq!(layouts.len(), 1);
+    assert_eq!(layouts[0].0.len(), 1);
+    assert_eq!(layouts[0].0[0].0, 0);
+}
+
+#[test]
+fn run_algo_cycle_with_self_loop() {
+    let edges = [(0, 1), (1, 2), (2, 0), (1, 1)];
+    let layouts = from_edges(&edges, &Config::default());
+    let mut ids = layouts
+        .iter()
+        .flat_map(|(l, _, _)| l.iter().map(|(id, _)| *id))
+        .collect::<Vec<_>>();
+    ids.sort();
+    assert_eq!(ids, vec![0, 1, 2]);
 }
 
 // pins the documented id semantics: the returned ids are positions in the

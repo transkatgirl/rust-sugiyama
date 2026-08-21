@@ -112,6 +112,19 @@ pub(super) fn start(mut graph: StableDiGraph<Vertex, Edge>, config: &Config) -> 
 }
 
 fn init_graph(graph: &mut StableDiGraph<Vertex, Edge>) {
+    // Self-loops cannot be broken by the edge reversal in phase 0 and have no
+    // influence on the layout (only vertex positions are computed), so drop
+    // them here as input normalization; the vertex itself is kept.
+    let edge_count_before = graph.edge_count();
+    graph.retain_edges(|g, e| {
+        let (tail, head) = g.edge_endpoints(e).unwrap();
+        tail != head
+    });
+    let removed = edge_count_before - graph.edge_count();
+    if removed > 0 {
+        info!("Removed {removed} self-loop(s) from the graph");
+    }
+
     info!("Initializing graphs vertex weights");
     for id in graph.node_indices().collect::<Vec<_>>() {
         graph[id].id = id.index();
@@ -379,4 +392,18 @@ fn is_valid_layout() {
     for (positions, _, _) in layouts {
         assert!(layout_is_valid(&positions));
     }
+}
+
+#[test]
+fn init_graph_strips_self_loops() {
+    let mut graph = StableDiGraph::<Vertex, Edge>::from_edges([(0, 1), (1, 1), (1, 2)]);
+
+    init_graph(&mut graph);
+
+    assert_eq!(graph.node_count(), 3);
+    assert_eq!(graph.edge_count(), 2);
+    assert!(graph.edge_indices().all(|e| {
+        let (tail, head) = graph.edge_endpoints(e).unwrap();
+        tail != head
+    }));
 }

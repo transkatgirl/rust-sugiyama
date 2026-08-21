@@ -12,13 +12,16 @@ use super::{Edge, Vertex};
 /// direction of the edges from that set.
 /// Is not guaranteed to find the minimum fas.
 ///
-/// Self-loops cannot be broken by reversal: they are deleted from the graph
-/// permanently and are not part of the returned list of reversed edges.
+/// Expects a graph without self-loops, since they cannot be broken by
+/// reversal; they are stripped during graph initialization in `init_graph`.
 pub(crate) fn remove_cycles(graph: &mut StableDiGraph<Vertex, Edge>) -> Vec<EdgeIndex> {
-    graph.retain_edges(|g, e| {
-        let (tail, head) = g.edge_endpoints(e).unwrap();
-        tail != head
-    });
+    debug_assert!(
+        graph.edge_indices().all(|e| {
+            let (tail, head) = graph.edge_endpoints(e).unwrap();
+            tail != head
+        }),
+        "self-loops must be stripped before cycle removal (see init_graph)"
+    );
 
     if !is_cyclic_directed(&*graph) {
         info!(target: "Cycle Removal", "Graph contains no cycle");
@@ -78,26 +81,6 @@ mod tests {
             (6, 5),
             (5, 2),
         ]);
-
-        assert!(is_cyclic_directed(&graph));
-        let _ = remove_cycles(&mut graph);
-        assert!(!is_cyclic_directed(&graph));
-    }
-
-    #[test]
-    fn test_graph_only_self_loop() {
-        let mut graph = StableDiGraph::<Vertex, Edge>::from_edges(&[(0, 0)]);
-
-        assert!(is_cyclic_directed(&graph));
-        let _ = remove_cycles(&mut graph);
-        assert!(!is_cyclic_directed(&graph));
-        assert_eq!(graph.node_count(), 1);
-    }
-
-    #[test]
-    fn test_graph_cycle_and_self_loop() {
-        let mut graph =
-            StableDiGraph::<Vertex, Edge>::from_edges(&[(0, 1), (1, 2), (2, 0), (1, 1)]);
 
         assert!(is_cyclic_directed(&graph));
         let _ = remove_cycles(&mut graph);
