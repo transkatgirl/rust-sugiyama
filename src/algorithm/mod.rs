@@ -239,7 +239,7 @@ fn execute_phase_3(
     layers.retain(|l| !l.is_empty());
     let mut layouts = p3::create_layouts(graph, &mut layers);
 
-    p3::align_to_smallest_width_layout(&mut layouts);
+    p3::align_to_smallest_width_layout(graph, &mut layouts);
     let mut x_coordinates = p3::calculate_relative_coords(layouts);
     // determine the smallest x-coordinate
     let min = x_coordinates

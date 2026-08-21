@@ -2,6 +2,7 @@
 
 This is a fork of the [rust-sugiyama](https://crates.io/crates/rust-sugiyama) crate with the following changes:
 - Fixes for upstream bugs
+- Minor improvements to coordinate assignment
 - Added CrossingMinimization::None
 - Added Config::divide_components
 

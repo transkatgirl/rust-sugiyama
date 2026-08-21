@@ -107,8 +107,8 @@ fn alignment_down_right() {
     assert_eq!(g[NodeIndex::from(10)].root, 7.into());
     assert_eq!(g[NodeIndex::from(11)].root, 11.into());
     assert_eq!(g[NodeIndex::from(12)].root, 6.into());
-    assert_eq!(g[NodeIndex::from(13)].root, 7.into());
-    assert_eq!(g[NodeIndex::from(14)].root, 11.into());
+    assert_eq!(g[NodeIndex::from(13)].root, 22.into());
+    assert_eq!(g[NodeIndex::from(14)].root, 14.into());
     assert_eq!(g[NodeIndex::from(15)].root, 18.into());
     assert_eq!(g[NodeIndex::from(16)].root, 1.into());
     assert_eq!(g[NodeIndex::from(17)].root, 17.into());
@@ -132,11 +132,11 @@ fn alignment_down_right() {
     assert_eq!(g[NodeIndex::from(7)].align, 10.into());
     assert_eq!(g[NodeIndex::from(8)].align, 4.into());
     assert_eq!(g[NodeIndex::from(9)].align, 25.into());
-    assert_eq!(g[NodeIndex::from(10)].align, 13.into());
-    assert_eq!(g[NodeIndex::from(11)].align, 14.into());
+    assert_eq!(g[NodeIndex::from(10)].align, 7.into());
+    assert_eq!(g[NodeIndex::from(11)].align, 11.into());
     assert_eq!(g[NodeIndex::from(12)].align, 6.into());
-    assert_eq!(g[NodeIndex::from(13)].align, 7.into());
-    assert_eq!(g[NodeIndex::from(14)].align, 11.into());
+    assert_eq!(g[NodeIndex::from(13)].align, 22.into());
+    assert_eq!(g[NodeIndex::from(14)].align, 14.into());
     assert_eq!(g[NodeIndex::from(15)].align, 18.into());
     assert_eq!(g[NodeIndex::from(16)].align, 1.into());
     assert_eq!(g[NodeIndex::from(17)].align, 19.into());
@@ -144,7 +144,7 @@ fn alignment_down_right() {
     assert_eq!(g[NodeIndex::from(19)].align, 23.into());
     assert_eq!(g[NodeIndex::from(20)].align, 24.into());
     assert_eq!(g[NodeIndex::from(21)].align, 12.into());
-    assert_eq!(g[NodeIndex::from(22)].align, 22.into());
+    assert_eq!(g[NodeIndex::from(22)].align, 13.into());
     assert_eq!(g[NodeIndex::from(23)].align, 17.into());
     assert_eq!(g[NodeIndex::from(24)].align, 15.into());
     assert_eq!(g[NodeIndex::from(25)].align, 9.into());
@@ -188,7 +188,7 @@ fn alignment_down_left() {
         assert_eq!(g[NodeIndex::from(n)].root, 17.into());
     }
     // block root 18
-    for n in [18, 20, 24] {
+    for n in [18, 20, 24, 15] {
         assert_eq!(g[NodeIndex::from(n)].root, 18.into());
     }
     // block root 5
@@ -200,7 +200,7 @@ fn alignment_down_left() {
         assert_eq!(g[NodeIndex::from(n)].root, 7.into());
     }
     // block root 21
-    for n in [21, 12, 15] {
+    for n in [21, 12] {
         assert_eq!(g[NodeIndex::from(n)].root, 21.into());
     }
     // block root 10
@@ -367,23 +367,36 @@ fn create_layouts_marks_type_1_conflicts() {
 fn align_to_smallest_width_aligns_extents() {
     use std::collections::HashMap;
 
-    let n0 = NodeIndex::from(0_u32);
-    let n1 = NodeIndex::from(1_u32);
+    let mut graph = StableDiGraph::<Vertex, Edge>::new();
+    let n0 = graph.add_node(Vertex {
+        size: (10.0, 1.0),
+        ..Default::default()
+    });
+    let n1 = graph.add_node(Vertex {
+        size: (2.0, 1.0),
+        ..Default::default()
+    });
     let mut layouts: Vec<HashMap<NodeIndex, f64>> = vec![
-        HashMap::from([(n0, 10.0), (n1, 30.0)]),  // width 20
-        HashMap::from([(n0, -5.0), (n1, 0.0)]),   // width 5, the smallest
-        HashMap::from([(n0, 100.0), (n1, 160.0)]), // width 60
-        HashMap::from([(n0, -50.0), (n1, -20.0)]), // width 30
+        HashMap::from([(n0, 30.0), (n1, 10.0)]), // extents [9, 35], width 26
+        HashMap::from([(n0, -5.0), (n1, 0.0)]),  // extents [-10, 1], width 11, the smallest
+        HashMap::from([(n0, 100.0), (n1, 160.0)]), // extents [95, 161], width 66
+        HashMap::from([(n0, -20.0), (n1, -50.0)]), // extents [-51, -15], width 36
     ];
 
-    super::align_to_smallest_width_layout(&mut layouts);
+    super::align_to_smallest_width_layout(&graph, &mut layouts);
 
-    let min = |l: &HashMap<NodeIndex, f64>| l.values().fold(f64::INFINITY, |a, b| a.min(*b));
-    let max = |l: &HashMap<NodeIndex, f64>| l.values().fold(f64::NEG_INFINITY, |a, b| a.max(*b));
-    // even indices ran left-to-right: aligned on the smallest layout's minimum
-    assert_eq!(min(&layouts[0]), -5.0);
-    assert_eq!(min(&layouts[2]), -5.0);
-    // odd indices ran right-to-left: aligned on the smallest layout's maximum
-    assert_eq!(max(&layouts[1]), 0.0);
-    assert_eq!(max(&layouts[3]), 0.0);
+    // even indices ran left-to-right: their leftmost vertex extent gets aligned
+    // to the smallest layout's leftmost extent (-10); the leftmost vertex of
+    // layout 0 is n1, whose left border sits at its coordinate - 1
+    assert_eq!(layouts[0][&n1], -9.0);
+    assert_eq!(layouts[0][&n0], 11.0);
+    assert_eq!(layouts[2][&n0], -5.0);
+    assert_eq!(layouts[2][&n1], 55.0);
+    // odd indices ran right-to-left: their rightmost vertex extent gets aligned
+    // to the smallest layout's rightmost extent (1); the rightmost vertex of
+    // layout 3 is n0, whose right border sits at its coordinate + 5
+    assert_eq!(layouts[1][&n0], -5.0);
+    assert_eq!(layouts[1][&n1], 0.0);
+    assert_eq!(layouts[3][&n0], -4.0);
+    assert_eq!(layouts[3][&n1], -34.0);
 }

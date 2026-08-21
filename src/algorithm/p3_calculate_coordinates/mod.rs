@@ -53,14 +53,27 @@ pub(super) fn create_layouts(
     layouts
 }
 
-pub(crate) fn align_to_smallest_width_layout(aligned_layouts: &mut [HashMap<NodeIndex, f64>]) {
+pub(crate) fn align_to_smallest_width_layout(
+    graph: &StableDiGraph<Vertex, Edge>,
+    aligned_layouts: &mut [HashMap<NodeIndex, f64>],
+) {
     info!(target: "coordinate_calculation", "Aligning all layouts to the one with the smallest width");
-    // determine minimum and maximum coordinate of each layout, plus the width
+    // determine the left- and rightmost vertex extent of each layout, plus the
+    // resulting width; coordinates are vertex centers, so the extents reach
+    // half a vertex width beyond them
     let min_max: Vec<(f64, f64, f64)> = aligned_layouts
         .iter()
         .map(|c| {
-            let min = *c.values().min_by(|a, b| a.total_cmp(b)).unwrap();
-            let max = *c.values().max_by(|a, b| a.total_cmp(b)).unwrap();
+            let min = c
+                .iter()
+                .map(|(v, x)| x - graph[*v].size.0 * 0.5)
+                .min_by(|a, b| a.total_cmp(b))
+                .unwrap();
+            let max = c
+                .iter()
+                .map(|(v, x)| x + graph[*v].size.0 * 0.5)
+                .max_by(|a, b| a.total_cmp(b))
+                .unwrap();
             (min, max, max - min)
         })
         .collect();
@@ -74,8 +87,8 @@ pub(crate) fn align_to_smallest_width_layout(aligned_layouts: &mut [HashMap<Node
         .0;
 
     // align all other layouts to the layout with the minimum width: layouts
-    // with an even index ran left-to-right and get aligned on their minimum
-    // coordinate, odd ones ran right-to-left and get aligned on their maximum
+    // with an even index ran left-to-right and get aligned on their leftmost
+    // extent, odd ones ran right-to-left and get aligned on their rightmost
     for (i, layout) in aligned_layouts.iter_mut().enumerate() {
         let shift = if i % 2 == 0 {
             min_max[min_width].0 - min_max[i].0
@@ -226,7 +239,14 @@ fn create_vertical_alignments(
             edges.sort_by(|e1, e2| graph[e1.1].pos.cmp(&graph[e2.1].pos));
 
             let d = (edges.len() as f64 + 1.) / 2. - 1.; // need to subtract one because indices are zero based
-            let lower_upper_median = [d.floor() as usize, d.ceil() as usize];
+            let mut lower_upper_median = [d.floor() as usize, d.ceil() as usize];
+
+            // when exactly one of two distinct median neighbors is a dummy,
+            // prefer aligning with the dummy so long edges stay straight
+            let [lo, hi] = lower_upper_median;
+            if lo != hi && graph[edges[hi].1].is_dummy && !graph[edges[lo].1].is_dummy {
+                lower_upper_median = [hi, lo];
+            }
 
             for m in lower_upper_median {
                 if graph[v].align == v {
