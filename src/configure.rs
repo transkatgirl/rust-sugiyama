@@ -11,6 +11,7 @@ pub const RANKING_TYPE_DEFAULT: RankingType = RankingType::MinimizeEdgeLength;
 pub const C_MINIMIZATION_DEFAULT: CrossingMinimization = CrossingMinimization::Barycenter;
 pub const TRANSPOSE_DEFAULT: bool = true;
 pub const DUMMY_SIZE_DEFAULT: f64 = 1.0;
+pub const DIVIDE_COMPONENTS_DEFAULT: bool = true;
 
 const ENV_MINIMUM_LENGTH: &str = "RUST_GRAPH_MIN_LEN";
 const ENV_VERTEX_SPACING: &str = "RUST_GRAPH_V_SPACING";
@@ -19,6 +20,7 @@ const ENV_RANKING_TYPE: &str = "RUST_GRAPH_R_TYPE";
 const ENV_CROSSING_MINIMIZATION: &str = "RUST_GRAPH_CROSS_MIN";
 const ENV_TRANSPOSE: &str = "RUST_GRAPH_TRANSPOSE";
 const ENV_DUMMY_SIZE: &str = "RUST_GRAPH_DUMMY_SIZE";
+const ENV_DIVIDE_COMPONENTS: &str = "RUST_GRAPH_DIVIDE_COMPONENTS";
 
 pub trait IntoCoordinates {}
 
@@ -72,6 +74,18 @@ pub struct Config {
     /// Whether to attempt to further reduce crossings by swapping vertices in a
     /// layer. This may increase runtime significantly.
     pub transpose: bool,
+    /// Whether to divide the graph into its weakly connected components and
+    /// lay out each component in its own coordinate space (one layout per
+    /// component is returned).
+    ///
+    /// When disabled, the graph is laid out as a whole and exactly one layout
+    /// is returned (none for an empty graph). With the default
+    /// [`Self::ranking_type`] ([`RankingType::MinimizeEdgeLength`]) the input
+    /// must be weakly connected, or the layout code will panic. The other
+    /// ranking types ([`RankingType::Up`], [`RankingType::Down`],
+    /// [`RankingType::Original`]) also accept disconnected input, placing all
+    /// components in one shared coordinate space.
+    pub divide_components: bool,
 }
 
 impl Config {
@@ -88,6 +102,7 @@ impl Config {
     /// | RUST_GRAPH_CROSS_MIN  | barycenter \| median \| none | barycenter | which heuristic to use for crossing reduction, or none to disable it |
     /// | RUST_GRAPH_TRANSPOSE  | y \| n               | y          | if transpose function is used to further try to reduce crossings (may increase runtime significally for large graphs) |
     /// | RUST_GRAPH_DUMMY_SIZE | float, > 0           | 1.0        | absolute width of dummy vertices, if dummy vertices are included. small values squish the graph horizontally |
+    /// | RUST_GRAPH_DIVIDE_COMPONENTS | y \| n        | y          | if the graph is divided into its connected components before layout. if disabled, the default ranking type requires a connected graph |
     pub fn new_from_env() -> Self {
         let mut config = Self::default();
 
@@ -123,6 +138,12 @@ impl Config {
 
         read_env!(config.transpose, parse_bool, ENV_TRANSPOSE);
 
+        read_env!(
+            config.divide_components,
+            parse_bool,
+            ENV_DIVIDE_COMPONENTS
+        );
+
         config
     }
 }
@@ -137,6 +158,7 @@ impl Default for Config {
             c_minimization: C_MINIMIZATION_DEFAULT,
             transpose: TRANSPOSE_DEFAULT,
             dummy_size: DUMMY_SIZE_DEFAULT,
+            divide_components: DIVIDE_COMPONENTS_DEFAULT,
         }
     }
 }
@@ -228,6 +250,7 @@ fn from_env_all_valid() {
     env::set_var(ENV_CROSSING_MINIMIZATION, "median");
     env::set_var(ENV_TRANSPOSE, "n");
     env::set_var(ENV_VERTEX_SPACING, "20");
+    env::set_var(ENV_DIVIDE_COMPONENTS, "n");
     let cfg = Config::new_from_env();
     assert_eq!(cfg.minimum_length, 5);
     assert_eq!(cfg.dummy_vertices, true);
@@ -236,6 +259,7 @@ fn from_env_all_valid() {
     assert_eq!(cfg.c_minimization, CrossingMinimization::Median);
     assert_eq!(cfg.transpose, false);
     assert_eq!(cfg.vertex_spacing, 20.0);
+    assert_eq!(cfg.divide_components, false);
 }
 
 #[test]

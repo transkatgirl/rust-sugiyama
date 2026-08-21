@@ -105,10 +105,18 @@ impl Default for Edge {
 
 pub(super) fn start(mut graph: StableDiGraph<Vertex, Edge>, config: &Config) -> Layouts<usize> {
     init_graph(&mut graph);
-    weakly_connected_components(graph)
-        .into_iter()
-        .map(|g| build_layout(g, config))
-        .collect()
+    if config.divide_components {
+        weakly_connected_components(graph)
+            .into_iter()
+            .map(|g| build_layout(g, config))
+            .collect()
+    } else if graph.node_count() == 0 {
+        // an empty graph must not enter the pipeline: it would panic in
+        // init_order's .expect("Got invalid ranking")
+        Vec::new()
+    } else {
+        vec![build_layout(graph, config)]
+    }
 }
 
 fn init_graph(graph: &mut StableDiGraph<Vertex, Edge>) {

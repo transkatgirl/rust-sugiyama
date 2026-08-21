@@ -3,6 +3,7 @@
 This is a fork of the [rust-sugiyama](https://crates.io/crates/rust-sugiyama) crate with the following changes:
 - Fixes for upstream bugs
 - Added CrossingMinimization::None
+- Added Config::divide_components
 
 The remainder of this README is copied from `rust-sugiyama`.
 
@@ -30,6 +31,7 @@ Currently, there are three options to create a layout:
 3. `from_graph`, which takes a `petgraph::StableDiGraph<V, E>`
 
 They will divide the graph into its connected components and calculate the coordinates seperately for each component.
+This division can be turned off via `Config::divide_components`, in which case the graph is laid out as a whole and a single layout is returned; note that the default ranking type (`MinimizeEdgeLength`) then requires the graph to be connected, while `Up`, `Down` and `Original` also handle disconnected graphs.
 The API is implemented via the builder pattern, where a user may specify values like the minimum spacing between vertices etc.
 
 ### build_layout_from_edges
@@ -137,3 +139,4 @@ Environment variables that can be set are:
 | RUST_GRAPH_CROSS_MIN  | (barycenter\|median\|none)   | barycenter | which heuristic to use for crossing reduction, or none to disable it |
 | RUST_GRAPH_TRANSPOSE  | (y\|n)                       | y          | if transpose function is used to further try to reduce crossings (may increase runtime significally for large graphs) |
 | RUST_GRAPH_DUMMY_SIZE | float, > 0                  | 1.0        | absolute width of dummy vertices, if dummy vertices are included. small values squish the graph horizontally |
+| RUST_GRAPH_DIVIDE_COMPONENTS | (y\|n)               | y          | if the graph is divided into its connected components before layout. if disabled, the default ranking type requires a connected graph |

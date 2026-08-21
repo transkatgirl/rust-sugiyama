@@ -194,9 +194,12 @@ impl DerefMut for Order {
 
 pub(super) fn insert_dummy_vertices(graph: &mut StableDiGraph<Vertex, Edge>, dummy_size: f64) {
     // find all edges that span more than one rank and insert dummy vertices
-    // on every rank in between. This also guarantees that no rank is empty:
-    // any would-be-empty rank is crossed by some edge (the graph is weakly
-    // connected), which now receives a dummy vertex on that rank.
+    // on every rank in between. For a weakly connected graph this also
+    // guarantees that no rank is empty: any would-be-empty rank is crossed by
+    // some edge, which now receives a dummy vertex on that rank. (With
+    // Config::divide_components disabled the graph may be disconnected and
+    // ranks can stay empty; empty ranks are dropped when the y-coordinates
+    // are computed.)
     info!(target: "crossing_reduction", "Inserting dummy vertices for edges spanning more than 1 rank");
     for edge in graph.edge_indices().collect::<Vec<_>>() {
         let (mut tail, head) = graph.edge_endpoints(edge).unwrap();

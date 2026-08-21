@@ -310,6 +310,67 @@ mod check_visuals {
     }
 
     #[test]
+    fn test_divide_components_disabled_disconnected() {
+        // two components; the default ranking type requires a connected
+        // graph, so use one that supports disconnected input
+        let edges = [(0, 1), (2, 3)];
+        let layouts = from_edges(
+            &edges,
+            &Config {
+                divide_components: false,
+                ranking_type: RankingType::Up,
+                ..Default::default()
+            },
+        );
+        assert_eq!(layouts.len(), 1);
+        let (layout, _, _) = &layouts[0];
+        assert_eq!(layout.len(), 4);
+        for v in 0..=3 {
+            assert!(layout.iter().any(|(id, _)| *id == v));
+        }
+        for (_, (x, y)) in layout {
+            assert!(x.is_finite() && y.is_finite());
+        }
+        // vertices of different components share one coordinate space but
+        // must not overlap
+        for (i, (_, a)) in layout.iter().enumerate() {
+            for (_, b) in &layout[i + 1..] {
+                assert!(a != b);
+            }
+        }
+    }
+
+    #[test]
+    fn test_divide_components_disabled_connected() {
+        let edges = [(0, 1), (1, 2), (0, 3), (3, 2)];
+        let layouts = from_edges(
+            &edges,
+            &Config {
+                divide_components: false,
+                ..Default::default()
+            },
+        );
+        assert_eq!(layouts.len(), 1);
+        let (layout, _, _) = &layouts[0];
+        for v in 0..=3 {
+            assert!(layout.iter().any(|(id, _)| *id == v));
+        }
+    }
+
+    #[test]
+    fn test_divide_components_disabled_empty_graph() {
+        let edges = [];
+        let layouts = from_edges(
+            &edges,
+            &Config {
+                divide_components: false,
+                ..Default::default()
+            },
+        );
+        assert!(layouts.is_empty());
+    }
+
+    #[test]
     fn test_no_dummies() {
         let vertices = [
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
