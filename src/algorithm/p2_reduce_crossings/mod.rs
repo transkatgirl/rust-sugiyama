@@ -274,6 +274,7 @@ pub(super) fn ordering(
     let cm_method = match crossing_minimization {
         CrossingMinimization::Barycenter => self::barycenter,
         CrossingMinimization::Median => self::median,
+        CrossingMinimization::None => return order._inner,
     };
     let order = reduce_crossings_bilayer_sweep(graph, order, cm_method, transpose);
     order._inner

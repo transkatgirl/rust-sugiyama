@@ -278,11 +278,36 @@ mod benchmark {
 mod check_visuals {
 
     use crate::{
-        configure::{Config, RankingType},
+        configure::{Config, CrossingMinimization, RankingType},
         from_vertices_and_edges,
     };
 
     use super::from_edges;
+
+    #[test]
+    fn test_crossing_minimization_disabled() {
+        let edges = [
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (2, 4),
+            (3, 5),
+            (4, 5),
+            (0, 5),
+        ];
+        let layouts = from_edges(
+            &edges,
+            &Config {
+                c_minimization: CrossingMinimization::None,
+                ..Default::default()
+            },
+        );
+        assert_eq!(layouts.len(), 1);
+        let (layout, _, _) = &layouts[0];
+        for v in 0..=5 {
+            assert!(layout.iter().any(|(id, _)| *id == v));
+        }
+    }
 
     #[test]
     fn test_no_dummies() {

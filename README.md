@@ -2,6 +2,7 @@
 
 This is a fork of the [rust-sugiyama](https://crates.io/crates/rust-sugiyama) crate with the following changes:
 - Fixes for upstream bugs
+- Added CrossingMinimization::None
 
 The remainder of this README is copied from `rust-sugiyama`.
 
@@ -133,6 +134,6 @@ Environment variables that can be set are:
 | RUST_GRAPH_V_SPACING  | integer, > 0                | 10         | minimum spacing between vertices on the same layer |
 | RUST_GRAPH_DUMMIES    | (y\|n)                       | y          | if dummy vertices are included in the final layout |
 | RUST_GRAPH_R_TYPE     | (original\|minimize\|up\|down) | minimize   | defines how vertices are places vertically |
-| RUST_GRAPH_CROSS_MIN  | (barycenter\|median)         | barycenter | which heuristic to use for crossing reduction |
+| RUST_GRAPH_CROSS_MIN  | (barycenter\|median\|none)   | barycenter | which heuristic to use for crossing reduction, or none to disable it |
 | RUST_GRAPH_TRANSPOSE  | (y\|n)                       | y          | if transpose function is used to further try to reduce crossings (may increase runtime significally for large graphs) |
 | RUST_GRAPH_DUMMY_SIZE | float, > 0                  | 1.0        | absolute width of dummy vertices, if dummy vertices are included. small values squish the graph horizontally |
