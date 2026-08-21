@@ -3,7 +3,8 @@
 //! a rank.
 //! Currently three ranking algorithm are implmented:
 //!
-//! 1. Original - tries to move each vertex as close to neighbors as possible.
+//! 1. Original - places each vertex at the midpoint of the highest and lowest
+//!    rank it can occupy (the Up and Down rankings).
 //! 2. MinimizeEdgeLength - builds a feasible tight tree in order to minimize
 //!    edge lengths. This is the technique describe in the paper by Gansner et al.
 //! 3. Up - Move vertices as far up as possible
@@ -16,7 +17,7 @@ pub(super) mod ranking;
 pub(crate) mod tests;
 
 use log::info;
-use petgraph::stable_graph::{EdgeIndex, StableDiGraph};
+use petgraph::stable_graph::{EdgeIndex, NodeIndex, StableDiGraph};
 use petgraph::visit::IntoNodeIdentifiers;
 
 use crate::configure::RankingType;
@@ -56,8 +57,19 @@ fn minimize_edge_length(graph: &mut StableDiGraph<Vertex, Edge>, minimum_length:
 }
 
 fn original(graph: &mut StableDiGraph<Vertex, Edge>, minimum_length: i32) {
+    // place each vertex at the midpoint of the highest rank it can occupy
+    // (up ranking) and the lowest (down ranking). The floor-average of two
+    // feasible rankings is feasible: for an edge (u, v),
+    // up(v) + down(v) >= up(u) + down(u) + 2 * minimum_length.
     move_vertices_up(graph, minimum_length);
+    let up_ranks: Vec<(NodeIndex, i32)> = graph
+        .node_identifiers()
+        .map(|v| (v, graph[v].rank))
+        .collect();
     move_vertices_down(graph, minimum_length);
+    for (v, up) in up_ranks {
+        graph[v].rank = (up + graph[v].rank) / 2;
+    }
 }
 
 fn leave_edge(graph: &StableDiGraph<Vertex, Edge>) -> Option<EdgeIndex> {

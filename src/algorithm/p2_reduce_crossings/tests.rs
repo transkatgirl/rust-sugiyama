@@ -171,10 +171,10 @@ mod insert_dummy_vertices {
 
     #[test]
     fn insert_dummy_vertices_one_dummy() {
-        let (mut graph, minimum_length) =
+        let (mut graph, _) =
             GraphBuilder::new_from_edges_with_ranking(&ONE_DUMMY, &ONE_DUMMY_RANKS).build();
         let n_vertices = graph.node_count();
-        insert_dummy_vertices(&mut graph, minimum_length, 0.0);
+        insert_dummy_vertices(&mut graph, 0.0);
         // one dummy vertex
         assert_eq!(graph.node_weights().filter(|w| w.is_dummy).count(), 1);
         // one more vertex
@@ -183,10 +183,10 @@ mod insert_dummy_vertices {
 
     #[test]
     fn insert_dummy_vertices_three_dummies() {
-        let (mut graph, minimum_length) =
+        let (mut graph, _) =
             GraphBuilder::new_from_edges_with_ranking(&THREE_DUMMIES, &THREE_DUMMIES_RANKS).build();
         let n_vertices = graph.node_count();
-        insert_dummy_vertices(&mut graph, minimum_length, 0.0);
+        insert_dummy_vertices(&mut graph, 0.0);
         // one dummy vertex
         assert_eq!(graph.node_weights().filter(|w| w.is_dummy).count(), 3);
         // one more vertex
@@ -195,11 +195,11 @@ mod insert_dummy_vertices {
 
     #[test]
     fn insert_dummy_vertices_7_dummies() {
-        let (mut graph, minimum_length) =
+        let (mut graph, _) =
             GraphBuilder::new_from_edges_with_ranking(&COMPLEX_EXAMPLE, &COMPLEX_EXAMPLE_RANKS)
                 .build();
         let n_vertices = graph.node_count();
-        insert_dummy_vertices(&mut graph, minimum_length, 0.0);
+        insert_dummy_vertices(&mut graph, 0.0);
         // one dummy vertex
         assert_eq!(graph.node_weights().filter(|w| w.is_dummy).count(), 7);
         // one more vertex
@@ -274,9 +274,9 @@ mod init_order {
 
     #[test]
     fn all_neighbors_must_be_at_adjacent_level_one_dummy() {
-        let (mut graph, minimum_length) =
+        let (mut graph, _) =
             GraphBuilder::new_from_edges_with_ranking(&ONE_DUMMY, &ONE_DUMMY_RANKS).build();
-        insert_dummy_vertices(&mut graph, minimum_length, 0.0);
+        insert_dummy_vertices(&mut graph, 0.0);
         for v in graph.node_indices() {
             let rank = graph[v].rank;
             for n in graph.neighbors_undirected(v) {
@@ -287,9 +287,9 @@ mod init_order {
 
     #[test]
     fn all_neighbors_must_be_at_adjacent_level_three_dummies() {
-        let (mut graph, minimum_length) =
+        let (mut graph, _) =
             GraphBuilder::new_from_edges_with_ranking(&THREE_DUMMIES, &THREE_DUMMIES_RANKS).build();
-        insert_dummy_vertices(&mut graph, minimum_length, 0.0);
+        insert_dummy_vertices(&mut graph, 0.0);
         for v in graph.node_indices() {
             let rank = graph[v].rank;
             for n in graph.neighbors_undirected(v) {
@@ -300,11 +300,11 @@ mod init_order {
 
     #[test]
     fn all_neighbors_must_be_at_adjacent_level_seven_dummies() {
-        let (mut graph, minimum_length) =
+        let (mut graph, _) =
             GraphBuilder::new_from_edges_with_ranking(&COMPLEX_EXAMPLE, &COMPLEX_EXAMPLE_RANKS)
                 .build();
 
-        insert_dummy_vertices(&mut graph, minimum_length, 0.0);
+        insert_dummy_vertices(&mut graph, 0.0);
         for v in graph.node_indices() {
             let rank = graph[v].rank;
             for n in graph.neighbors_undirected(v) {
@@ -440,5 +440,46 @@ mod order {
             expected_order._inner[0],
             vec![n0, n1, n2, n3, n4, n5, n6, n7]
         );
+    }
+}
+
+mod median_heuristic {
+    use std::collections::HashMap;
+
+    use petgraph::stable_graph::StableDiGraph;
+
+    use crate::algorithm::{p2_reduce_crossings::median, Edge, Vertex};
+
+    /// two upper vertices, each connected to the lower vertex by two parallel
+    /// edges; positions of the lower rank neighbors are [0, 0, 2, 2]
+    fn parallel_edge_graph() -> (StableDiGraph<Vertex, Edge>, HashMap<petgraph::stable_graph::NodeIndex, usize>) {
+        let mut graph = StableDiGraph::new();
+        let u = graph.add_node(Vertex { rank: 0, ..Default::default() });
+        let w = graph.add_node(Vertex { rank: 0, ..Default::default() });
+        let v = graph.add_node(Vertex { rank: 1, ..Default::default() });
+        for _ in 0..2 {
+            graph.add_edge(u, v, Edge::default());
+            graph.add_edge(w, v, Edge::default());
+        }
+        let positions = HashMap::from([(u, 0), (w, 2), (v, 0)]);
+        (graph, positions)
+    }
+
+    #[test]
+    fn median_duplicate_positions_finite() {
+        let (graph, positions) = parallel_edge_graph();
+        let v = graph.node_indices().nth(2).unwrap();
+        let m = median(&graph, v, true, &positions);
+        assert!(m.is_finite());
+        assert_eq!(m, 1.0); // plain average of [0, 0, 2, 2]
+    }
+
+    #[test]
+    fn median_no_neighbors_keeps_position() {
+        let (graph, positions) = parallel_edge_graph();
+        // w has no incoming neighbors; on a downwards sweep it must keep its
+        // current position instead of being pushed to the end of the layer
+        let w = graph.node_indices().nth(1).unwrap();
+        assert_eq!(median(&graph, w, true, &positions), 2.0);
     }
 }

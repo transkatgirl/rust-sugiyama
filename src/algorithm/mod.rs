@@ -145,7 +145,6 @@ fn build_layout(mut graph: StableDiGraph<Vertex, Edge>, config: &Config) -> Layo
 
     let layers = execute_phase_2(
         &mut graph,
-        config.minimum_length as i32,
         config.dummy_vertices.then_some(config.dummy_size),
         config.c_minimization,
         config.transpose,
@@ -179,7 +178,6 @@ fn execute_phase_1(
 /// dummies will be passed along to the next phase.
 fn execute_phase_2(
     graph: &mut StableDiGraph<Vertex, Edge>,
-    minimum_length: i32,
     dummy_size: Option<f64>,
     crossing_minimization: CrossingMinimization,
     transpose: bool,
@@ -192,7 +190,7 @@ fn execute_phase_2(
         transpose
     );
 
-    p2::insert_dummy_vertices(graph, minimum_length, dummy_size.unwrap_or(0.0));
+    p2::insert_dummy_vertices(graph, dummy_size.unwrap_or(0.0));
     let mut order = p2::ordering(graph, crossing_minimization, transpose);
     if dummy_size.is_none() {
         p2::remove_dummy_vertices(graph, &mut order);
@@ -213,6 +211,11 @@ fn execute_phase_3(
     }
     let width = layers.iter().map(|l| l.len()).max().unwrap_or(0) as f64;
     let height = layers.len() as f64;
+    // removing dummy vertices can leave empty ranks behind (when dummies are
+    // disabled and minimum_length > 1); drop them after the layer count is
+    // recorded, so the rest of the phase can rely on every layer being
+    // occupied
+    layers.retain(|l| !l.is_empty());
     let mut layouts = p3::create_layouts(graph, &mut layers);
 
     p3::align_to_smallest_width_layout(&mut layouts);
@@ -313,6 +316,21 @@ fn print_to_console(
         }
     }
     println!();
+}
+
+#[test]
+fn self_loops_do_not_panic() {
+    // graphs containing self-loops used to panic in cycle removal
+    let edges = [(0, 1), (1, 1)];
+
+    let graph = StableDiGraph::from_edges(edges);
+
+    let layouts = start(graph, &Config::default());
+
+    assert_eq!(layouts.len(), 1);
+    let mut ids = layouts[0].0.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+    ids.sort();
+    assert_eq!(ids, vec![0, 1]);
 }
 
 #[test]

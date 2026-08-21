@@ -1,5 +1,9 @@
-# Rust Sugiyama
-![example worklfow](https://github.com/paddison/rust-sugiyama/actions/workflows/rust_ci.yml/badge.svg)
+## Rust Sugiyama Fork
+
+This is a fork of the [rust-sugiyama](https://crates.io/crates/rust-sugiyama) crate with the following changes:
+- Fixes for upstream bugs
+
+The remainder of this README is copied from `rust-sugiyama`.
 
 ## Description
 
@@ -19,7 +23,7 @@ Bugs or feature requests can be either submitted via a github issue or by contac
 
 ## Usage
 
-Currently, there are three options to create a layout: 
+Currently, there are three options to create a layout:
 1. `from_edges`, which takes a `&[(u32, u32)]`
 2. `from_vertices_and_edges`, which takes a `&[u32]` and a `&[(u32, u32)]`
 3. `from_graph`, which takes a `petgraph::StableDiGraph<V, E>`
@@ -119,19 +123,16 @@ for (layout, width, height) in layouts {
 ```
 
 ### configuration via envs
-It is also possible to configure the algorithm via environment variables, using the method `configure_from_env()`. 
+It is also possible to configure the algorithm via environment variables, using the method `configure_from_env()`.
 
 Environment variables that can be set are:
 
 |ENV|values|default|description|
 |---|------|-------|-------|
-| RUST_GRAPH_MIN_LEN    | integer, > 0                | 1          | minimum edge length between layers |
+| RUST_GRAPH_MIN_LEN    | integer, > 0                | 1          | minimum number of layers an edge spans (structural only, does not affect vertical spacing) |
 | RUST_GRAPH_V_SPACING  | integer, > 0                | 10         | minimum spacing between vertices on the same layer |
 | RUST_GRAPH_DUMMIES    | (y\|n)                       | y          | if dummy vertices are included in the final layout |
 | RUST_GRAPH_R_TYPE     | (original\|minimize\|up\|down) | minimize   | defines how vertices are places vertically |
 | RUST_GRAPH_CROSS_MIN  | (barycenter\|median)         | barycenter | which heuristic to use for crossing reduction |
 | RUST_GRAPH_TRANSPOSE  | (y\|n)                       | y          | if transpose function is used to further try to reduce crossings (may increase runtime significally for large graphs) |
-| RUST_GRAPH_DUMMY_SIZE | float, > 0, <= 1            | 1.0        |size of dummy vertices in final layout, if dummy vertices are included. this will squish the graph horizontally |
-
-
-
+| RUST_GRAPH_DUMMY_SIZE | float, > 0                  | 1.0        | absolute width of dummy vertices, if dummy vertices are included. small values squish the graph horizontally |

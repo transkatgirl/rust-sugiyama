@@ -42,15 +42,28 @@ macro_rules! read_env {
 /// Used to configure parameters of the graph layout.
 #[derive(Clone, Copy, Debug)]
 pub struct Config {
-    /// Length between layers.
+    /// The minimum number of layers (ranks) an edge spans, i.e. the minimum
+    /// rank difference between an edge's endpoints. Must be at least 1.
+    ///
+    /// This setting is structural only: values greater than 1 route edges
+    /// across additional intermediate ranks, but do **not** stretch the
+    /// drawing vertically. The vertical gap between adjacent ranks is derived
+    /// from the heights of the real vertices in each rank (plus
+    /// [`Self::vertex_spacing`]); intermediate ranks that hold only dummy
+    /// vertices, or no vertices at all, contribute no height. So the
+    /// y-distance between two connected vertices stays the same as with a
+    /// minimum length of 1. Use [`Self::vertex_spacing`] or the vertex sizes
+    /// to control vertical distance.
     pub minimum_length: u32,
     /// The minimum spacing between vertices on the same layer and between
     /// layers.
     pub vertex_spacing: f64,
     /// Whether to include dummy vertices when calculating the layout.
     pub dummy_vertices: bool,
-    /// How much space a dummy should take up, as a multiplier of the
-    /// [`Self::vertex_spacing`].
+    /// The absolute width of each dummy vertex, in layout units. Unlike real
+    /// vertices, dummies do not get [`Self::vertex_spacing`] added as padding,
+    /// so small values let long edges pass close to neighboring vertices,
+    /// squishing the graph horizontally.
     pub dummy_size: f64,
     /// Defines how vertices are placed vertically.
     pub ranking_type: RankingType,
@@ -68,13 +81,13 @@ impl Config {
     ///
     /// | ENV | values | default | description |
     /// | --- | ------ | ------- | ----------- |
-    /// | RUST_GRAPH_MIN_LEN    | integer, > 0         | 1          | minimum edge length between layers |
+    /// | RUST_GRAPH_MIN_LEN    | integer, > 0         | 1          | minimum number of layers an edge spans (structural only, does not affect vertical spacing) |
     /// | RUST_GRAPH_V_SPACING  | integer, > 0         | 10         | minimum spacing between vertices on the same layer |
     /// | RUST_GRAPH_DUMMIES    | y \| n               | y          | if dummy vertices are included in the final layout |
     /// | RUST_GRAPH_R_TYPE     | original \| minimize \| up \| down | minimize   | defines how vertices are places vertically |
     /// | RUST_GRAPH_CROSS_MIN  | barycenter \| median | barycenter | which heuristic to use for crossing reduction |
     /// | RUST_GRAPH_TRANSPOSE  | y \| n               | y          | if transpose function is used to further try to reduce crossings (may increase runtime significally for large graphs) |
-    /// | RUST_GRAPH_DUMMY_SIZE | float, 1 >= v > 0    | 1.0        |size of dummy vertices in final layout, if dummy vertices are included. this will squish the graph horizontally |
+    /// | RUST_GRAPH_DUMMY_SIZE | float, > 0           | 1.0        | absolute width of dummy vertices, if dummy vertices are included. small values squish the graph horizontally |
     pub fn new_from_env() -> Self {
         let mut config = Self::default();
 
@@ -131,7 +144,8 @@ impl Default for Config {
 /// Defines the Ranking type, i.e. how vertices are placed on each layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RankingType {
-    /// First moves vertices as far up as possible, and then as low as possible
+    /// Places each vertex halfway between the highest and lowest rank it can
+    /// occupy (the midpoint of the [`Self::Up`] and [`Self::Down`] rankings)
     Original,
     /// Tries to minimize edge lengths across layers
     MinimizeEdgeLength,

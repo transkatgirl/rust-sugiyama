@@ -16,6 +16,9 @@ pub(super) fn create_layouts(
 ) -> Vec<HashMap<NodeIndex, f64>> {
     info!(target: "coordinate_calculation", "Creating individual layouts for coordinate calculation");
     let mut layouts = Vec::new();
+    // marking reads `Vertex::rank` and `Vertex::pos`, which are only valid
+    // after an alignment reset
+    reset_alignment(graph, layers);
     mark_type_1_conflicts(graph, layers);
     // calculate the coordinates for each direction
     for _v_dir in [VDir::Down, VDir::Up] {
@@ -70,11 +73,12 @@ pub(crate) fn align_to_smallest_width_layout(aligned_layouts: &mut [HashMap<Node
         .unwrap()
         .0;
 
-    // align all other layouts to the lowest coordinate of the layout with the minimum width,
+    // align all other layouts to the layout with the minimum width: layouts
+    // with an even index ran left-to-right and get aligned on their minimum
+    // coordinate, odd ones ran right-to-left and get aligned on their maximum
     for (i, layout) in aligned_layouts.iter_mut().enumerate() {
-        // if i % 2 == 0, then horizontal direction was left
         let shift = if i % 2 == 0 {
-            min_max[i].0 - min_max[min_width].0
+            min_max[min_width].0 - min_max[i].0
         } else {
             min_max[min_width].1 - min_max[i].1
         };
@@ -156,7 +160,7 @@ fn mark_type_1_conflicts(graph: &mut StableDiGraph<Vertex, Edge>, layers: &[Vec<
                     }
                 }
             };
-            while l < l_1 {
+            while l <= l_1 {
                 let vertex = next_level[l];
                 let mut upper_neighbors = graph
                     .neighbors_directed(vertex, Incoming)
@@ -165,8 +169,15 @@ fn mark_type_1_conflicts(graph: &mut StableDiGraph<Vertex, Edge>, layers: &[Vec<
                 for upper_neighbor in upper_neighbors {
                     let vertex_index = graph[upper_neighbor].pos;
                     if vertex_index < left_dummy_index || vertex_index > right_dummy_index {
-                        let edge = graph.find_edge(upper_neighbor, vertex).unwrap();
-                        graph[edge].has_type_1_conflict = true;
+                        // mark every parallel edge between the pair, so an
+                        // unmarked duplicate can't be used for alignment
+                        let edges = graph
+                            .edges_connecting(upper_neighbor, vertex)
+                            .map(|e| e.id())
+                            .collect::<Vec<_>>();
+                        for edge in edges {
+                            graph[edge].has_type_1_conflict = true;
+                        }
                     }
                 }
                 l += 1;

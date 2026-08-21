@@ -345,3 +345,45 @@ fn place_blocks() {
         assert_eq!(g[v].sink, 7.into());
     }
 }
+
+#[test]
+fn create_layouts_marks_type_1_conflicts() {
+    // regression test: the live pipeline reaches create_layouts without any
+    // `pos` value having been assigned; marking must still find the conflicts
+    let (mut graph, mut layers) = create_test_layout();
+    for v in graph.node_indices().collect::<Vec<_>>() {
+        graph[v].pos = 0;
+    }
+
+    let _ = super::create_layouts(&mut graph, &mut layers);
+
+    assert!(graph[graph.find_edge(6.into(), 8.into()).unwrap()].has_type_1_conflict);
+    assert!(graph[graph.find_edge(7.into(), 12.into()).unwrap()].has_type_1_conflict);
+    assert!(graph[graph.find_edge(5.into(), 8.into()).unwrap()].has_type_1_conflict);
+    assert!(graph[graph.find_edge(9.into(), 22.into()).unwrap()].has_type_1_conflict);
+}
+
+#[test]
+fn align_to_smallest_width_aligns_extents() {
+    use std::collections::HashMap;
+
+    let n0 = NodeIndex::from(0_u32);
+    let n1 = NodeIndex::from(1_u32);
+    let mut layouts: Vec<HashMap<NodeIndex, f64>> = vec![
+        HashMap::from([(n0, 10.0), (n1, 30.0)]),  // width 20
+        HashMap::from([(n0, -5.0), (n1, 0.0)]),   // width 5, the smallest
+        HashMap::from([(n0, 100.0), (n1, 160.0)]), // width 60
+        HashMap::from([(n0, -50.0), (n1, -20.0)]), // width 30
+    ];
+
+    super::align_to_smallest_width_layout(&mut layouts);
+
+    let min = |l: &HashMap<NodeIndex, f64>| l.values().fold(f64::INFINITY, |a, b| a.min(*b));
+    let max = |l: &HashMap<NodeIndex, f64>| l.values().fold(f64::NEG_INFINITY, |a, b| a.max(*b));
+    // even indices ran left-to-right: aligned on the smallest layout's minimum
+    assert_eq!(min(&layouts[0]), -5.0);
+    assert_eq!(min(&layouts[2]), -5.0);
+    // odd indices ran right-to-left: aligned on the smallest layout's maximum
+    assert_eq!(max(&layouts[1]), 0.0);
+    assert_eq!(max(&layouts[3]), 0.0);
+}

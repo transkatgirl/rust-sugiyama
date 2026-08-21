@@ -1,4 +1,4 @@
-use rust_sugiyama::{configure::Config, from_edges};
+use rust_sugiyama_fork::{configure::Config, from_edges};
 
 fn main() {
     let edges = [

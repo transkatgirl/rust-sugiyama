@@ -3,7 +3,7 @@ use petgraph::{
     visit::EdgeRef,
     Direction,
 };
-use rust_sugiyama::{configure::Config, from_graph};
+use rust_sugiyama_fork::{configure::Config, from_graph};
 use std::collections::HashMap;
 use svg::{
     node::{

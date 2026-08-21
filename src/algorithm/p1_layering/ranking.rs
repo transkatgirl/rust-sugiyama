@@ -48,7 +48,9 @@ pub(super) fn feasible_tree(graph: &mut StableDiGraph<Vertex, Edge>, minimum_len
 pub(super) fn move_vertices_up(graph: &mut StableDiGraph<Vertex, Edge>, minimum_length: i32) {
     // set rank of all vertices to the max rank + 1 of all the upper neighbors
     info!(target: "ranking", "Moving vertices as far up as possible");
-    for v in graph.node_indices().collect::<Vec<_>>() {
+    // process vertices in topological order, so every vertex sees the final
+    // ranks of its incoming neighbors
+    for v in petgraph::algo::toposort(&*graph, None).unwrap() {
         let rank = graph
             .neighbors_directed(v, Incoming)
             .map(|n| graph[n].rank + minimum_length)
@@ -63,10 +65,12 @@ pub(super) fn move_vertices_up(graph: &mut StableDiGraph<Vertex, Edge>, minimum_
 pub(super) fn move_vertices_down(graph: &mut StableDiGraph<Vertex, Edge>, minimum_length: i32) {
     info!(target: "ranking", "Moving vertices as far down as possible");
     if let Some(max_rank) = graph.node_weights().map(|w| w.rank).max() {
-        for v in graph.node_indices().collect::<Vec<_>>() {
+        // process vertices in reverse topological order, so every vertex sees
+        // the final ranks of its outgoing neighbors
+        for v in petgraph::algo::toposort(&*graph, None).unwrap().into_iter().rev() {
             let rank = graph
                 .neighbors_directed(v, Outgoing)
-                .filter_map(|n| graph[n].rank.checked_sub(minimum_length))
+                .map(|n| graph[n].rank - minimum_length)
                 .min()
                 .unwrap_or(max_rank);
 
@@ -220,7 +224,7 @@ mod tests {
 
     use super::{
         super::tests::{GraphBuilder, EXAMPLE_GRAPH},
-        init_rank, update_ranks,
+        init_rank, move_vertices_down, update_ranks,
     };
 
     #[test]
@@ -367,6 +371,45 @@ mod tests {
             if graph[edge].is_tree_edge {
                 assert_eq!(slack(&graph, edge, minimum_length), 0);
             }
+        }
+    }
+
+    #[test]
+    fn move_vertices_down_cascades() {
+        // vertex 0 must cascade down to rank 1 once both of its successors
+        // have settled on the bottom rank, regardless of iteration order
+        let (mut graph, minimum_length, ..) =
+            GraphBuilder::new(&[(0, 1), (0, 4), (2, 3), (3, 4)]).build();
+
+        init_rank(&mut graph, minimum_length);
+        move_vertices_down(&mut graph, minimum_length);
+
+        let expected = [(0, 1), (1, 2), (2, 0), (3, 1), (4, 2)];
+        for (id, rank) in expected {
+            assert_eq!(graph[petgraph::stable_graph::NodeIndex::from(id as u32)].rank, rank, "vertex {id}");
+        }
+    }
+
+    #[test]
+    fn original_is_midpoint_of_up_and_down() {
+        // 0 -> 1 -> 2 -> 3 with a lone source 4 -> 3: Up puts vertex 4 at
+        // rank 0, Down at rank 2, Original must place it at the midpoint
+        let (mut graph, minimum_length, ..) =
+            GraphBuilder::new(&[(0, 1), (1, 2), (2, 3), (4, 3)]).build();
+
+        crate::algorithm::p1_layering::rank(
+            &mut graph,
+            minimum_length,
+            crate::configure::RankingType::Original,
+        );
+
+        let expected = [(0, 0), (1, 1), (2, 2), (3, 3), (4, 1)];
+        for (id, rank) in expected {
+            assert_eq!(
+                graph[petgraph::stable_graph::NodeIndex::from(id as u32)].rank,
+                rank,
+                "vertex {id}"
+            );
         }
     }
 

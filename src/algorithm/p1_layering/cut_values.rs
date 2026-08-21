@@ -14,7 +14,7 @@ struct NeighborhoodInfo {
     cut_value_sum: i32,
     tree_edge_weight_sum: i32,
     non_tree_edge_weight_sum: i32,
-    missing: Option<NodeIndex>,
+    missing: Option<EdgeIndex>,
 }
 
 pub(super) fn init_cutvalues(graph: &mut StableDiGraph<Vertex, Edge>) {
@@ -65,25 +65,27 @@ fn calculate_cut_values(graph: &mut StableDiGraph<Vertex, Edge>, mut queue: VecD
             _ => continue,
         };
 
-        let missing = match (incoming.missing, outgoing.missing) {
-            (Some(u), None) => u,
-            (None, Some(v)) => v,
+        let edge = match (incoming.missing, outgoing.missing) {
+            (Some(e), None) => e,
+            (None, Some(e)) => e,
             _ => continue,
         };
 
-        let edge = match graph.find_edge(vertex, missing) {
-            Some(e) => {
-                // switch direction, if vertex is tail component of edge
-                std::mem::swap(&mut incoming, &mut outgoing);
-                e
-            }
-            None => graph.find_edge(missing, vertex).unwrap(),
+        // the edge is identified by its index, never by its endpoint pair:
+        // parallel edges make endpoint lookups ambiguous
+        let (tail, head) = graph.edge_endpoints(edge).unwrap();
+        let other = if tail == vertex {
+            // switch direction, if vertex is tail component of edge
+            std::mem::swap(&mut incoming, &mut outgoing);
+            head
+        } else {
+            tail
         };
 
         graph[edge].cut_value = Some(calculate_cut_value(graph[edge].weight, incoming, outgoing));
         trace!(target: "cut_values", "Cut values for edge: {}, {:?}", edge.index(), graph[edge].cut_value);
         // continue traversing tree in direction of edge whose vertex was missing before
-        queue.push_back(missing);
+        queue.push_back(other);
     }
 }
 
@@ -114,16 +116,15 @@ fn get_neighborhood_info(
     let mut non_tree_edge_weight_sum = 0;
     let mut missing = None;
 
-    for edge in graph.edges_directed(vertex, direction) {
-        let (tail, head) = (edge.source(), edge.target());
-        let edge = *edge.weight();
+    for edge_ref in graph.edges_directed(vertex, direction) {
+        let edge = *edge_ref.weight();
         if !edge.is_tree_edge {
             non_tree_edge_weight_sum += edge.weight;
         } else if let Some(cut_value) = edge.cut_value {
             cut_value_sum += cut_value;
             tree_edge_weight_sum += edge.weight;
         } else if missing.is_none() {
-            missing = Some(if tail == vertex { head } else { tail });
+            missing = Some(edge_ref.id());
         } else {
             return None;
         }
@@ -134,6 +135,30 @@ fn get_neighborhood_info(
         non_tree_edge_weight_sum,
         missing,
     })
+}
+
+/// Finds the tree edge connecting two vertices. Looks up edges in both
+/// directions, since the tree is undirected. Never resolved via
+/// `find_edge_undirected`, since that may return a parallel non-tree edge.
+///
+/// The caller walks the tree that existed before the current exchange, whose
+/// leaving edge already had its tree flag cleared, so that edge counts as a
+/// tree edge here.
+fn tree_edge_between(
+    graph: &StableDiGraph<Vertex, Edge>,
+    a: NodeIndex,
+    b: NodeIndex,
+    removed_edge: EdgeIndex,
+) -> EdgeIndex {
+    graph
+        .edges_directed(a, Incoming)
+        .chain(graph.edges_directed(a, Outgoing))
+        .find(|e| {
+            (e.weight().is_tree_edge || e.id() == removed_edge)
+                && (e.source() == b || e.target() == b)
+        })
+        .map(|e| e.id())
+        .unwrap()
 }
 
 fn remove_outdated_cut_values(
@@ -159,7 +184,7 @@ fn remove_outdated_cut_values(
         Some(mut parent) => {
             let mut l = w;
             loop {
-                let edge = graph.find_edge_undirected(l, parent).unwrap().0;
+                let edge = tree_edge_between(graph, l, parent, removed_edge);
                 graph[edge].cut_value = None;
                 l = parent;
                 trace!(target: "cut_values", "current node in path: {}", l.index());
@@ -178,7 +203,7 @@ fn remove_outdated_cut_values(
     let mut l = x;
     while l != least_common_ancestor {
         let parent = graph[l].parent.unwrap();
-        let edge = graph.find_edge_undirected(l, parent).unwrap().0;
+        let edge = tree_edge_between(graph, l, parent, removed_edge);
         graph[edge].cut_value = None;
         l = parent;
     }

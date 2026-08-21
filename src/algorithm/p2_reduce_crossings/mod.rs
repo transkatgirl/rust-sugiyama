@@ -12,7 +12,7 @@ use petgraph::Direction::{Incoming, Outgoing};
 use crate::configure::CrossingMinimization;
 use crate::util::{iterate, radix_sort, IterDir};
 
-use super::{slack, Edge, Vertex};
+use super::{Edge, Vertex};
 
 #[derive(Clone)]
 struct Order {
@@ -192,18 +192,16 @@ impl DerefMut for Order {
     }
 }
 
-pub(super) fn insert_dummy_vertices(
-    graph: &mut StableDiGraph<Vertex, Edge>,
-    minimum_length: i32,
-    dummy_size: f64,
-) {
-    // find all edges that have slack of greater than 0.
-    // and insert dummy vertices
-    info!(target: "crossing_reduction", "Inserting dummy vertices for edges spanning more than {minimum_length} ranks");
+pub(super) fn insert_dummy_vertices(graph: &mut StableDiGraph<Vertex, Edge>, dummy_size: f64) {
+    // find all edges that span more than one rank and insert dummy vertices
+    // on every rank in between. This also guarantees that no rank is empty:
+    // any would-be-empty rank is crossed by some edge (the graph is weakly
+    // connected), which now receives a dummy vertex on that rank.
+    info!(target: "crossing_reduction", "Inserting dummy vertices for edges spanning more than 1 rank");
     for edge in graph.edge_indices().collect::<Vec<_>>() {
-        if slack(graph, edge, minimum_length) > 0 {
-            let (mut tail, head) = graph.edge_endpoints(edge).unwrap();
-            trace!(target: "crossing_reduction", 
+        let (mut tail, head) = graph.edge_endpoints(edge).unwrap();
+        if graph[head].rank - graph[tail].rank > 1 {
+            trace!(target: "crossing_reduction",
                 "Inserting {} dummy vertices between: ({}, {})", 
                 graph[head].rank - graph[tail].rank - 1, 
                 tail.index(), 
@@ -415,7 +413,7 @@ fn order_layer(
             .map(|n| (*n, cm_method(graph, *n, move_down, &positions)))
             .collect::<HashMap<NodeIndex, f64>>();
 
-        new_order[rank].sort_by(|a, b| ordering.get(a).partial_cmp(&ordering.get(b)).unwrap());
+        new_order[rank].sort_by(|a, b| ordering.get(a).unwrap().total_cmp(ordering.get(b).unwrap()));
 
         new_order[rank].iter().enumerate().for_each(|(pos, v)| {
             positions.insert(*v, pos);
@@ -481,14 +479,21 @@ fn median(
     let length_p = adjacent.len();
     let m = length_p / 2;
     if length_p == 0 {
-        f64::MAX
+        // no neighbors in the sweep direction: keep the current position
+        *positions.get(&vertex).unwrap() as f64
     } else if length_p % 2 == 1 {
         adjacent[m] as f64
-    } else if length_p == 2 {
-        (adjacent[0] + adjacent[1]) as f64 / 2.
     } else {
         let left = adjacent[m - 1] - adjacent[0];
         let right = adjacent[length_p - 1] - adjacent[m];
-        (adjacent[m - 1] * right + adjacent[m] * left) as f64 / (left + right) as f64
+        if left + right == 0 {
+            // the middle values equal the extremes on both sides (two
+            // neighbors, or duplicate positions from e.g. parallel edges),
+            // so the weighted interpolation would divide by zero; fall
+            // back to the plain average
+            (adjacent[m - 1] + adjacent[m]) as f64 / 2.
+        } else {
+            (adjacent[m - 1] * right + adjacent[m] * left) as f64 / (left + right) as f64
+        }
     }
 }

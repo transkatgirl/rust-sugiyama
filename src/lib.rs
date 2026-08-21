@@ -19,6 +19,19 @@ type Layouts<T> = Vec<(Vec<(T, (f64, f64))>, f64, f64)>;
 /// subgraph layout, the width, and the height. The layout of a subgraph is a
 /// list of the vertex number (as specified in the edges) and its x and y
 /// position respectively.
+///
+/// # Width and height semantics
+///
+/// The returned `width` and `height` are vertex and layer *counts*, not
+/// geometric extents: `width` is the maximum number of vertices in any layer
+/// (including dummy vertices when [`Config::dummy_vertices`] is enabled), and
+/// `height` is the number of layers (including layers that hold only dummy
+/// vertices, or that are left empty when dummy vertices are disabled and
+/// [`Config::minimum_length`] is greater than 1). The x and y coordinates, in
+/// contrast, are in geometric units derived from the vertex sizes and
+/// [`Config::vertex_spacing`]. To obtain the geometric bounding box of a
+/// subgraph, compute it from the returned coordinates (and, when using sized
+/// vertices, the vertex sizes).
 pub fn from_edges(edges: &[(u32, u32)], config: &Config) -> Layouts<usize> {
     info!(target: "initializing", "Creating new layout from edges, containing {} edges", edges.len());
     let graph = StableDiGraph::from_edges(edges);
@@ -30,6 +43,9 @@ pub fn from_edges(edges: &[(u32, u32)], config: &Config) -> Layouts<usize> {
 /// The layouts are returned as a list of disjoint subgraphs containing the
 /// subgraph layout, the width, and the height. The layout of a subgraph is a
 /// list of the [NodeIndex] and its x and y position respectively.
+///
+/// The returned `width` and `height` are vertex and layer counts, not
+/// geometric extents; see [`from_edges`] for the exact semantics.
 pub fn from_graph<V, E>(
     graph: &StableDiGraph<V, E>,
     vertex_size: &impl Fn(NodeIndex, &V) -> (f64, f64),
@@ -63,8 +79,15 @@ pub fn from_graph<V, E>(
 /// and vertex size) and `&[(u32, u32)]` (edges).
 ///
 /// The layouts are returned as a list of disjoint subgraphs containing the
-/// subgraph layout, the width, and the height. The layout of a subgraph is a
-/// list of the vertex number and its x and y position respectively.
+/// subgraph layout, the width, and the height. The returned `width` and
+/// `height` are vertex and layer counts, not geometric extents; see
+/// [`from_edges`] for the exact semantics.
+///
+/// Note that the `usize` in each layout entry is **not** the vertex id given
+/// in `vertices`: it is the vertex's position in the `vertices` slice
+/// (0-based, in insertion order). To recover the id you supplied, index back
+/// into the slice: `vertices[entry].0`. Only when your ids already are
+/// `0..vertices.len()` in order do the two coincide.
 ///
 /// # Panics
 ///
@@ -102,6 +125,23 @@ fn run_algo_empty_graph() {
     let edges = [];
     let g = from_edges(&edges, &Config::default());
     assert!(g.is_empty());
+}
+
+// pins the documented id semantics: the returned ids are positions in the
+// `vertices` slice, not the caller-supplied vertex ids
+#[test]
+fn from_vertices_and_edges_returns_slice_positions() {
+    let vertices = [(10, (5.0, 5.0)), (20, (5.0, 5.0)), (30, (5.0, 5.0))];
+    let edges = [(10, 20), (10, 30)];
+
+    let layouts = from_vertices_and_edges(&vertices, &edges, &Config::default());
+
+    let mut ids = layouts
+        .iter()
+        .flat_map(|(l, _, _)| l.iter().map(|(id, _)| *id))
+        .collect::<Vec<_>>();
+    ids.sort();
+    assert_eq!(ids, vec![0, 1, 2]);
 }
 
 #[cfg(test)]
@@ -414,6 +454,96 @@ mod check_visuals {
         ];
 
         let layout = from_edges(&edges, &Config::default());
+        println!("{layout:?}");
+    }
+
+    // regression test: this acyclic graph with duplicate edges used to hang
+    // the network simplex forever, because cut values were resolved via
+    // endpoint pairs, which are ambiguous for parallel edges
+    #[test]
+    fn duplicate_edges_terminate() {
+        let edges = [
+            (0, 1),
+            (0, 2),
+            (2, 3),
+            (3, 4),
+            (0, 5),
+            (3, 6),
+            (3, 7),
+            (4, 8),
+            (2, 9),
+            (8, 10),
+            (0, 4),
+            (1, 7),
+            (3, 6),
+            (0, 4),
+            (5, 8),
+            (5, 8),
+            (1, 9),
+            (4, 6),
+            (0, 6),
+            (3, 6),
+            (0, 1),
+            (7, 8),
+            (5, 9),
+            (6, 9),
+            (0, 2),
+            (2, 3),
+            (1, 6),
+            (1, 9),
+        ];
+
+        let layouts = from_edges(&edges, &Config::default());
+        let mut seen = std::collections::HashSet::new();
+        for (layout, _, _) in &layouts {
+            for (_, (x, y)) in layout {
+                assert!(x.is_finite() && y.is_finite());
+                assert!(
+                    seen.insert(((x * 100.0).round() as i64, (y * 100.0).round() as i64)),
+                    "two vertices placed at the same coordinates"
+                );
+            }
+        }
+    }
+
+    // regression test: tight edges spanning two ranks used to leave empty
+    // ranks behind, which crashed crossing reduction and coordinate assignment
+    #[test]
+    fn minimum_length_2_no_panic() {
+        for dummy_vertices in [true, false] {
+            let config = Config {
+                minimum_length: 2,
+                dummy_vertices,
+                ..Default::default()
+            };
+            for edges in [vec![(0, 1)], vec![(0, 1), (1, 2), (0, 2)]] {
+                let layouts = from_edges(&edges, &config);
+                let mut y = std::collections::HashMap::new();
+                for (layout, _, _) in &layouts {
+                    for (id, (_, vy)) in layout {
+                        y.insert(*id, *vy);
+                    }
+                }
+                for (tail, head) in &edges {
+                    assert!(
+                        y[&(*head as usize)] > y[&(*tail as usize)],
+                        "edge ({tail}, {head}) does not point downwards"
+                    );
+                }
+            }
+        }
+    }
+
+    // regression test: duplicate parallel edges used to produce a NaN in the
+    // weighted median, which crashed the ordering sort
+    #[test]
+    fn median_duplicate_edges_no_panic() {
+        let edges = [(0, 2), (0, 2), (1, 2), (1, 2), (0, 3)];
+        let config = Config {
+            c_minimization: crate::configure::CrossingMinimization::Median,
+            ..Default::default()
+        };
+        let layout = from_edges(&edges, &config);
         println!("{layout:?}");
     }
 }
