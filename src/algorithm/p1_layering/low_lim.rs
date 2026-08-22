@@ -5,6 +5,10 @@ use petgraph::stable_graph::{NodeIndex, StableDiGraph};
 
 use super::{Edge, Vertex};
 
+/// Initializes the low/lim postorder numbering and parent pointers of the
+/// spanning tree (`Vertex::low`, `Vertex::lim`, `Vertex::parent`), which let
+/// the network simplex decide in O(1) on which side of a tree edge a vertex
+/// lies. Requires the spanning tree built by `feasible_tree`.
 pub(super) fn init_low_lim(graph: &mut StableDiGraph<Vertex, Edge>) {
     // start at arbitrary root node
     info!(target: "low_lim", "initialzing low, lim and parent values of vertices");
@@ -15,6 +19,8 @@ pub(super) fn init_low_lim(graph: &mut StableDiGraph<Vertex, Edge>) {
     dfs_low_lim(graph, root, None, &mut max_lim, &mut HashSet::new());
 }
 
+/// Renumbers only the subtree below `least_common_ancestor` after an edge
+/// exchange; the numbering outside that subtree stays valid.
 pub(super) fn update_low_lim(
     graph: &mut StableDiGraph<Vertex, Edge>,
     least_common_ancestor: NodeIndex,

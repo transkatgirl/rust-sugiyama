@@ -8,6 +8,7 @@ use petgraph::{
 
 use super::{cut_values::init_cutvalues, low_lim::init_low_lim, slack, Edge, Vertex};
 
+// debug aid, prints the rank of every vertex to stdout
 #[allow(dead_code)]
 pub(crate) fn print_ranks(graph: &StableDiGraph<Vertex, Edge>) {
     for (i, v) in graph.node_indices().enumerate() {
@@ -19,8 +20,14 @@ pub(crate) fn print_ranks(graph: &StableDiGraph<Vertex, Edge>) {
     println!("\n");
 }
 
-/// Builds a feasible tree, which means a tree in which each edge has a
-/// minimum amount of slack (edge length = minimum length)
+/// Builds a feasible tight spanning tree (every tree edge has slack 0) and
+/// initializes the cut values and low/lim numbering the network simplex
+/// iteration works on. Requires an initial feasible ranking from
+/// [`init_rank`], and the network simplex scratch state (spanning tree
+/// membership, cut values, low/lim numbers) at its defaults: stale state
+/// from an earlier ranking makes the leftover tree count as already tight,
+/// so the simplex iteration silently starts from (and possibly keeps) an
+/// un-minimized ranking. See the preconditions of [`super::rank`].
 pub(super) fn feasible_tree(graph: &mut StableDiGraph<Vertex, Edge>, minimum_length: i32) {
     info!(target: "ranking", "building feasible tree");
     let tree_root = graph.node_indices().next().unwrap();
@@ -45,7 +52,14 @@ pub(super) fn feasible_tree(graph: &mut StableDiGraph<Vertex, Edge>, minimum_len
     init_low_lim(graph);
 }
 
-pub(super) fn move_vertices_up(graph: &mut StableDiGraph<Vertex, Edge>, minimum_length: i32) {
+/// Assigns every vertex its minimum feasible rank: each vertex is pulled as
+/// far up as its incoming neighbors allow (sources end up on rank 0). This
+/// is the [`crate::configure::RankingType::Up`] ranking.
+///
+/// # Panics
+///
+/// Panics if the graph is cyclic.
+pub fn move_vertices_up(graph: &mut StableDiGraph<Vertex, Edge>, minimum_length: i32) {
     // set rank of all vertices to the max rank + 1 of all the upper neighbors
     info!(target: "ranking", "Moving vertices as far up as possible");
     // process vertices in topological order, so every vertex sees the final
@@ -62,12 +76,25 @@ pub(super) fn move_vertices_up(graph: &mut StableDiGraph<Vertex, Edge>, minimum_
     }
 }
 
-pub(super) fn move_vertices_down(graph: &mut StableDiGraph<Vertex, Edge>, minimum_length: i32) {
+/// Assigns every vertex its maximum feasible rank below the current maximum:
+/// each vertex is pushed as far down as its outgoing neighbors allow (sinks
+/// end up on the bottom rank). Expects an existing feasible ranking (e.g.
+/// from [`init_rank`]), whose maximum rank is kept. This is the
+/// [`crate::configure::RankingType::Down`] ranking.
+///
+/// # Panics
+///
+/// Panics if the graph is cyclic.
+pub fn move_vertices_down(graph: &mut StableDiGraph<Vertex, Edge>, minimum_length: i32) {
     info!(target: "ranking", "Moving vertices as far down as possible");
     if let Some(max_rank) = graph.node_weights().map(|w| w.rank).max() {
         // process vertices in reverse topological order, so every vertex sees
         // the final ranks of its outgoing neighbors
-        for v in petgraph::algo::toposort(&*graph, None).unwrap().into_iter().rev() {
+        for v in petgraph::algo::toposort(&*graph, None)
+            .unwrap()
+            .into_iter()
+            .rev()
+        {
             let rank = graph
                 .neighbors_directed(v, Outgoing)
                 .map(|n| graph[n].rank - minimum_length)
@@ -80,6 +107,9 @@ pub(super) fn move_vertices_down(graph: &mut StableDiGraph<Vertex, Edge>, minimu
     }
 }
 
+/// Recomputes all ranks from the spanning tree after an edge exchange, by
+/// walking the tree from an arbitrary start vertex and making every tree
+/// edge tight.
 pub(super) fn update_ranks(graph: &mut StableDiGraph<Vertex, Edge>, minimum_length: i32) {
     info!(target: "ranking", "Updating node ranks");
     let node = graph.node_indices().next().unwrap();
@@ -146,10 +176,18 @@ fn tight_tree(
     node_count
 }
 
-pub(crate) fn init_rank(graph: &mut StableDiGraph<Vertex, Edge>, minimum_length: i32) {
+/// Assigns an initial feasible ranking (every edge spans at least
+/// `minimum_length` ranks) by visiting the vertices in topological order and
+/// placing each vertex directly below its lowest incoming neighbor. Ranks
+/// are relative to the ranks the vertices already carry (a fresh graph
+/// starts with rank 0 everywhere).
+///
+/// # Panics
+///
+/// Panics if the graph is cyclic.
+pub fn init_rank(graph: &mut StableDiGraph<Vertex, Edge>, minimum_length: i32) {
     // Sort nodes topologically so we don't need to verify that we've assigned
     // a rank to all incoming neighbors
-    // assume graphs contain no circles for now
     info!(target: "ranking", "Initializing ranks via topological sort.");
     for v in petgraph::algo::toposort(&*graph, None).unwrap() {
         let rank = graph
@@ -386,7 +424,11 @@ mod tests {
 
         let expected = [(0, 1), (1, 2), (2, 0), (3, 1), (4, 2)];
         for (id, rank) in expected {
-            assert_eq!(graph[petgraph::stable_graph::NodeIndex::from(id as u32)].rank, rank, "vertex {id}");
+            assert_eq!(
+                graph[petgraph::stable_graph::NodeIndex::from(id as u32)].rank,
+                rank,
+                "vertex {id}"
+            );
         }
     }
 

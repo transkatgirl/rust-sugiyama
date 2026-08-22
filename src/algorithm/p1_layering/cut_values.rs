@@ -17,6 +17,9 @@ struct NeighborhoodInfo {
     missing: Option<EdgeIndex>,
 }
 
+/// Computes the cut value of every spanning tree edge from scratch,
+/// traversing the tree inward from its leaves. Requires the tight spanning
+/// tree built by `feasible_tree`.
 pub(super) fn init_cutvalues(graph: &mut StableDiGraph<Vertex, Edge>) {
     // TODO: check if it is faster to collect tree edges or to do unecessary iterations
     info!(target: "cut_values", "Initializing cut values");
@@ -26,6 +29,10 @@ pub(super) fn init_cutvalues(graph: &mut StableDiGraph<Vertex, Edge>) {
     calculate_cut_values(graph, queue);
 }
 
+/// Recomputes only the cut values invalidated by exchanging `removed_edge`
+/// against `swap_edge` (those on the tree path between the removed edge's
+/// endpoints). Returns the least common ancestor of the removed edge's
+/// endpoints in the spanning tree, which `update_low_lim` continues from.
 pub(super) fn update_cutvalues(
     graph: &mut StableDiGraph<Vertex, Edge>,
     removed_edge: EdgeIndex,

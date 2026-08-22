@@ -3,6 +3,7 @@ use petgraph::stable_graph::{NodeIndex, StableDiGraph};
 use crate::algorithm::p3_calculate_coordinates::{
     create_vertical_alignments, mark_type_1_conflicts,
 };
+use crate::configure::PairSeparation;
 
 use super::{reset_alignment, Edge, Vertex};
 
@@ -334,7 +335,7 @@ fn place_blocks() {
         .map(|v| v.into())
         .collect();
 
-    let x_coordinates = super::place_blocks(&mut g, &l);
+    let x_coordinates = super::place_blocks(&mut g, &l, None);
 
     assert_eq!(x_coordinates.len(), 26);
     for v in block_1 {
@@ -355,7 +356,7 @@ fn create_layouts_marks_type_1_conflicts() {
         graph[v].pos = 0;
     }
 
-    let _ = super::create_layouts(&mut graph, &mut layers, false);
+    let _ = super::create_layouts(&mut graph, &mut layers, None);
 
     assert!(graph[graph.find_edge(6.into(), 8.into()).unwrap()].has_type_1_conflict);
     assert!(graph[graph.find_edge(7.into(), 12.into()).unwrap()].has_type_1_conflict);
@@ -404,16 +405,72 @@ fn per_pair_separation_places_blocks_tighter() {
     };
 
     let (mut graph, layers, [a0, b0, _, _]) = build();
-    let x = super::do_horizontal_compaction(&mut graph, &layers, false);
+    let x = super::do_horizontal_compaction(&mut graph, &layers, None);
     // half the sum of the blocks' max widths: (100 + 10) / 2
     assert_eq!(x[&b0] - x[&a0], 55.0);
 
     let (mut graph, layers, [a0, b0, a1, a2]) = build();
-    let x = super::do_horizontal_compaction(&mut graph, &layers, true);
+    let x = super::do_horizontal_compaction(
+        &mut graph,
+        &layers,
+        Some(PairSeparation {
+            vertex_gap: 0.0,
+            edge_gap: 0.0,
+        }),
+    );
     // only the widths of the adjacent pair (a0, b0) matter: (10 + 10) / 2
     assert_eq!(x[&b0] - x[&a0], 10.0);
     assert_eq!(x[&a0], x[&a1]);
     assert_eq!(x[&a0], x[&a2]);
+
+    let (mut graph, layers, [a0, b0, _, _]) = build();
+    let x = super::do_horizontal_compaction(
+        &mut graph,
+        &layers,
+        Some(PairSeparation {
+            vertex_gap: 7.0,
+            edge_gap: 3.0,
+        }),
+    );
+    // the explicit vertex gap is added on top of the pair's own widths
+    assert_eq!(x[&b0] - x[&a0], 17.0);
+}
+
+#[test]
+fn per_pair_separation_uses_edge_gap_for_dummies() {
+    // a single layer of singleton blocks: a pair of dummies between real
+    // vertices, plus a trailing real pair
+    let mut graph = StableDiGraph::<Vertex, Edge>::new();
+    let mut add = |width: f64, is_dummy: bool| {
+        graph.add_node(Vertex {
+            size: (width, 10.0),
+            is_dummy,
+            ..Default::default()
+        })
+    };
+    let r0 = add(10.0, false);
+    let d0 = add(2.0, true);
+    let d1 = add(2.0, true);
+    let r1 = add(10.0, false);
+    let r2 = add(10.0, false);
+
+    let layers = vec![vec![r0, d0, d1, r1, r2]];
+    reset_alignment(&mut graph, &layers);
+
+    let x = super::do_horizontal_compaction(
+        &mut graph,
+        &layers,
+        Some(PairSeparation {
+            vertex_gap: 7.0,
+            edge_gap: 3.0,
+        }),
+    );
+
+    // pairs involving a dummy use the edge gap, real pairs the vertex gap
+    assert_eq!(x[&d0] - x[&r0], (10.0 + 2.0) * 0.5 + 3.0); // real-dummy
+    assert_eq!(x[&d1] - x[&d0], (2.0 + 2.0) * 0.5 + 3.0); // dummy-dummy
+    assert_eq!(x[&r1] - x[&d1], (2.0 + 10.0) * 0.5 + 3.0); // dummy-real
+    assert_eq!(x[&r2] - x[&r1], (10.0 + 10.0) * 0.5 + 7.0); // real-real
 }
 
 #[test]

@@ -1,3 +1,24 @@
+//! Phase 3 of the algorithm: coordinate assignment.
+//!
+//! The x-coordinates are computed with the algorithm from the 2001 paper
+//! "Fast and Simple Horizontal Coordinate Assignment" by Brandes and Köpf
+//! ([link](https://doi.org/10.1007/3-540-45848-4_3)): after marking type 1
+//! conflicts (edge crossings between a long-edge segment and an ordinary
+//! edge), four extremal candidate layouts are produced — one per combination
+//! of vertical ([`VDir`]) and horizontal ([`HDir`]) direction — by aligning
+//! each vertex vertically with a median neighbor into blocks and compacting
+//! the blocks horizontally. The candidates are aligned to the narrowest one
+//! ([`align_to_smallest_width_layout`]) and combined by taking, per vertex,
+//! the average of the two median candidate coordinates
+//! ([`calculate_relative_coords`]).
+//!
+//! This implementation deviates from the paper in two ways: vertex
+//! separation respects individual vertex widths (either per alignment block
+//! or, with [`crate::configure::Config::per_pair_separation`], per pair of
+//! adjacent vertices plus an explicit vertex/edge gap), and when exactly one
+//! of two distinct median neighbors is a dummy vertex, alignment prefers the
+//! dummy so long edges stay straight.
+
 #[cfg(test)]
 mod tests;
 
@@ -9,11 +30,34 @@ use petgraph::visit::EdgeRef;
 use petgraph::Direction::Incoming;
 
 use super::{slack, Edge, Vertex};
+use crate::configure::PairSeparation;
 
-pub(super) fn create_layouts(
+/// Computes the four Brandes-Köpf candidate layouts, one map of x-coordinates
+/// per combination of vertical and horizontal direction, in the order
+/// `[Down/Right, Down/Left, Up/Right, Up/Left]`. Coordinates of the Left
+/// runs are already mirrored back, and the graph and layers are restored to
+/// their original orientation on return (they are rotated while the
+/// function runs).
+///
+/// `layers` must cover every vertex of the graph exactly once, grouped by
+/// rank and ordered by position (as produced by phase 2), and no layer may
+/// be empty.
+///
+/// With `per_pair_separation` set, adjacent vertices are separated by their
+/// own widths plus the given explicit gaps instead of by the maximum vertex
+/// widths of their alignment blocks; see
+/// [`crate::configure::Config::per_pair_separation`].
+///
+/// # Panics
+///
+/// Panics (with an index out of bounds) if a layer is empty — note that
+/// [`super::p2_reduce_crossings::remove_dummy_vertices`] can leave empty
+/// layers behind — or if `layers` does not cover the graph as described
+/// above.
+pub fn create_layouts(
     graph: &mut StableDiGraph<Vertex, Edge>,
     layers: &mut [Vec<NodeIndex>],
-    per_pair_separation: bool,
+    per_pair_separation: Option<PairSeparation>,
 ) -> Vec<HashMap<NodeIndex, f64>> {
     info!(target: "coordinate_calculation", "Creating individual layouts for coordinate calculation");
     let mut layouts = Vec::new();
@@ -54,7 +98,12 @@ pub(super) fn create_layouts(
     layouts
 }
 
-pub(crate) fn align_to_smallest_width_layout(
+/// Shifts the four candidate layouts of [`create_layouts`] so they share the
+/// horizontal extent of the narrowest one: layouts with an even index ran
+/// left-to-right and are aligned on their leftmost vertex extent, odd ones
+/// ran right-to-left and are aligned on their rightmost. Extents take the
+/// vertex widths ([`Vertex::size`]) into account.
+pub fn align_to_smallest_width_layout(
     graph: &StableDiGraph<Vertex, Edge>,
     aligned_layouts: &mut [HashMap<NodeIndex, f64>],
 ) {
@@ -103,18 +152,25 @@ pub(crate) fn align_to_smallest_width_layout(
     }
 }
 
-pub(crate) fn calculate_relative_coords(
+/// Combines candidate layouts into the final x-coordinate per vertex by
+/// averaging the two median candidate values ("the average median is both
+/// order and separation preserving", Brandes & Köpf). Expects the aligned
+/// layouts of [`align_to_smallest_width_layout`].
+///
+/// The order of the returned pairs is unspecified and may differ between
+/// runs (it derives from hash-map iteration); sort the result if a stable
+/// order is needed.
+///
+/// # Panics
+///
+/// Panics if fewer than four layouts are given, or if a key of the first
+/// layout is missing from any of layouts 1-3. Layouts beyond the fourth,
+/// and keys not present in the first layout, are silently ignored.
+pub fn calculate_relative_coords(
     aligned_layouts: Vec<HashMap<NodeIndex, f64>>,
 ) -> Vec<(NodeIndex, f64)> {
     info!(target: "coordinate_calculation", 
         "Calculate relative coordinates, by taking average between two medians of absolute x-coordinates for each layout direction");
-    // sort all 4 coordinates per vertex in ascending order
-    for l in &aligned_layouts {
-        let mut v = l.iter().collect::<Vec<_>>();
-        v.sort_by(|a, b| a.0.index().cmp(&b.0.index()));
-        // format to NodeIndex: (x, y), width, height
-        // println!("{v:?}\n");
-    }
     let mut sorted_layouts = HashMap::new();
     for k in aligned_layouts.first().unwrap().keys() {
         let mut vertex_coordinates = [
@@ -155,6 +211,9 @@ fn get_inner_segment_upper_neighbor(
     }
 }
 
+/// Marks every edge that crosses an inner segment (an edge between two
+/// dummy vertices) with `Edge::has_type_1_conflict`, making it ineligible
+/// for vertical alignment; long edges win over ordinary edges.
 fn mark_type_1_conflicts(graph: &mut StableDiGraph<Vertex, Edge>, layers: &[Vec<NodeIndex>]) {
     info!(target: "coordinate_calculation", 
         "Marking type one conflicts (edge crossings between dummy vertices and non dummy vertices)");
@@ -201,6 +260,9 @@ fn mark_type_1_conflicts(graph: &mut StableDiGraph<Vertex, Edge>, layers: &[Vec<
     }
 }
 
+/// Resets the per-vertex alignment state (root, align, sink, shift) and
+/// re-derives `Vertex::rank` and `Vertex::pos` from the given layers, in
+/// preparation for one alignment pass.
 pub(super) fn reset_alignment(graph: &mut StableDiGraph<Vertex, Edge>, layers: &[Vec<NodeIndex>]) {
     for (rank, row) in layers.iter().enumerate() {
         for (pos, v) in row.iter().enumerate() {
@@ -268,15 +330,18 @@ fn create_vertical_alignments(
     }
 }
 
+/// Computes the x-coordinates of one alignment pass: places the blocks
+/// formed by `create_vertical_alignments`, then shifts the block classes as
+/// close together as possible.
 fn do_horizontal_compaction(
     graph: &mut StableDiGraph<Vertex, Edge>,
     layers: &[Vec<NodeIndex>],
-    per_pair_separation: bool,
+    per_pair_separation: Option<PairSeparation>,
 ) -> HashMap<NodeIndex, f64> {
     info!(target: "coordinate_calculation", "calculating coordinates for layout.");
     compute_separation_widths(graph, per_pair_separation);
 
-    let mut x_coordinates = place_blocks(graph, layers);
+    let mut x_coordinates = place_blocks(graph, layers, per_pair_separation);
     // calculate class shifts
     info!(target: "coordinate_calculation", "move blocks as close together as possible");
     for i in 0..layers.len() {
@@ -298,7 +363,7 @@ fn do_horizontal_compaction(
 
                     if graph[v].pos > 0 {
                         let u = pred(graph[v], layers);
-                        let gap = (graph[v].separation_width + graph[u].separation_width) * 0.5;
+                        let gap = separation(graph, v, u, per_pair_separation);
                         let distance_v_u = *x_coordinates.get(&v).unwrap()
                             - (*x_coordinates.get(&u).unwrap() + gap);
                         let u_sink = graph[u].sink;
@@ -329,9 +394,13 @@ fn do_horizontal_compaction(
 /// Assigns [Vertex::separation_width], the width used when separating a
 /// vertex from its neighbors on the same layer: the maximum width of the
 /// vertices in the vertex's block, or the vertex's own width if
-/// `per_pair_separation` is enabled.
-fn compute_separation_widths(graph: &mut StableDiGraph<Vertex, Edge>, per_pair_separation: bool) {
-    if per_pair_separation {
+/// `per_pair_separation` is enabled (the explicit gaps are added on top by
+/// [`separation`]).
+fn compute_separation_widths(
+    graph: &mut StableDiGraph<Vertex, Edge>,
+    per_pair_separation: Option<PairSeparation>,
+) {
+    if per_pair_separation.is_some() {
         for v in graph.node_indices().collect::<Vec<_>>() {
             graph[v].separation_width = graph[v].size.0;
         }
@@ -365,9 +434,29 @@ fn compute_separation_widths(graph: &mut StableDiGraph<Vertex, Edge>, per_pair_s
     }
 }
 
+/// The minimum center-to-center distance between the horizontally adjacent
+/// vertices `a` and `b`: half the sum of their separation widths, plus, in
+/// per-pair mode, the configured gap (the edge gap when either vertex is a
+/// dummy). Both consumers of the separation (block placement and the sink
+/// shifts) must use this same value, or block classes could overlap.
+fn separation(
+    graph: &StableDiGraph<Vertex, Edge>,
+    a: NodeIndex,
+    b: NodeIndex,
+    per_pair_separation: Option<PairSeparation>,
+) -> f64 {
+    let base = (graph[a].separation_width + graph[b].separation_width) * 0.5;
+    match per_pair_separation {
+        None => base,
+        Some(gaps) if graph[a].is_dummy || graph[b].is_dummy => base + gaps.edge_gap,
+        Some(gaps) => base + gaps.vertex_gap,
+    }
+}
+
 fn place_blocks(
     graph: &mut StableDiGraph<Vertex, Edge>,
     layers: &[Vec<NodeIndex>],
+    per_pair_separation: Option<PairSeparation>,
 ) -> HashMap<NodeIndex, f64> {
     info!(target: "coordinate_calculation", "Placing vertices in blocks.");
     let mut x_coordinates = HashMap::new();
@@ -377,7 +466,7 @@ fn place_blocks(
         .filter(|v| graph[*v].root == *v)
         .collect::<Vec<_>>()
     {
-        place_block(graph, layers, root, &mut x_coordinates);
+        place_block(graph, layers, root, &mut x_coordinates, per_pair_separation);
     }
     x_coordinates
 }
@@ -386,6 +475,7 @@ fn place_block(
     layers: &[Vec<NodeIndex>],
     root: NodeIndex,
     x_coordinates: &mut HashMap<NodeIndex, f64>,
+    per_pair_separation: Option<PairSeparation>,
 ) {
     if x_coordinates.get(&root).is_some() {
         return;
@@ -396,13 +486,16 @@ fn place_block(
         if graph[w].pos > 0 {
             let pred_w = pred(graph[w], layers);
             let u = graph[pred_w].root;
-            place_block(graph, layers, u, x_coordinates);
+            place_block(graph, layers, u, x_coordinates, per_pair_separation);
             // initialize sink of current node to have the same sink as the root
             if graph[root].sink == root {
                 graph[root].sink = graph[u].sink;
             }
             if graph[root].sink == graph[u].sink {
-                let gap = (graph[w].separation_width + graph[pred_w].separation_width) * 0.5;
+                // the constraint is between the same-layer pair (w, pred_w);
+                // applying it against x[u] is valid because every member of
+                // u's block ends up on the x-coordinate of its root u
+                let gap = separation(graph, w, pred_w, per_pair_separation);
                 x_coordinates.insert(
                     root,
                     x_coordinates
@@ -425,25 +518,25 @@ fn place_block(
     }
 }
 
+// the vertex immediately left of the given vertex within its layer
 fn pred(vertex: Vertex, layers: &[Vec<NodeIndex>]) -> NodeIndex {
     layers[vertex.rank as usize][vertex.pos - 1]
 }
-/// Represents a layered graph whose vertices have been aligned in blocks.
-/// A root is the highest node in a block, depending on the direction.
-///
-/// It is used to determine classes of a block, calculate the x-coordinates of a block
-/// in regard to its class and shift classes together as close as possible.
-///
-/// Represents the horizontal direction in which the algorithm is run
+
+/// The horizontal direction in which a Brandes-Köpf alignment pass runs.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum HDir {
+pub enum HDir {
+    /// The pass runs right-to-left.
     Left,
+    /// The pass runs left-to-right.
     Right,
 }
 
-/// Represents the vertical direction in which the algorithm is run
+/// The vertical direction in which a Brandes-Köpf alignment pass runs.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum VDir {
+pub enum VDir {
+    /// The pass runs bottom-to-top.
     Up,
+    /// The pass runs top-to-bottom.
     Down,
 }

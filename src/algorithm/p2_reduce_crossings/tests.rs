@@ -425,11 +425,11 @@ mod order {
         graph.add_edge(n6, s3, Edge::default());
         graph.add_edge(n7, s4, Edge::default());
 
-        let _inner = vec![
+        let layers = vec![
             vec![n0, n2, n4, n3, n6, n7, n1, n5],
             vec![s0, s1, s2, s3, s4],
         ];
-        let order = Order::new(_inner);
+        let order = Order::new(layers);
         let expected_order = order_layer(
             &graph,
             false,
@@ -437,7 +437,7 @@ mod order {
             crate::algorithm::p2_reduce_crossings::barycenter,
         );
         assert_eq!(
-            expected_order._inner[0],
+            expected_order.layers()[0],
             vec![n0, n1, n2, n3, n4, n5, n6, n7]
         );
     }
@@ -452,11 +452,23 @@ mod median_heuristic {
 
     /// two upper vertices, each connected to the lower vertex by two parallel
     /// edges; positions of the lower rank neighbors are [0, 0, 2, 2]
-    fn parallel_edge_graph() -> (StableDiGraph<Vertex, Edge>, HashMap<petgraph::stable_graph::NodeIndex, usize>) {
+    fn parallel_edge_graph() -> (
+        StableDiGraph<Vertex, Edge>,
+        HashMap<petgraph::stable_graph::NodeIndex, usize>,
+    ) {
         let mut graph = StableDiGraph::new();
-        let u = graph.add_node(Vertex { rank: 0, ..Default::default() });
-        let w = graph.add_node(Vertex { rank: 0, ..Default::default() });
-        let v = graph.add_node(Vertex { rank: 1, ..Default::default() });
+        let u = graph.add_node(Vertex {
+            rank: 0,
+            ..Default::default()
+        });
+        let w = graph.add_node(Vertex {
+            rank: 0,
+            ..Default::default()
+        });
+        let v = graph.add_node(Vertex {
+            rank: 1,
+            ..Default::default()
+        });
         for _ in 0..2 {
             graph.add_edge(u, v, Edge::default());
             graph.add_edge(w, v, Edge::default());

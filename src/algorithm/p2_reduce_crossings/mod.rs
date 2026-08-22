@@ -1,8 +1,26 @@
+//! Phase 2 of the algorithm: crossing reduction.
+//!
+//! Before the actual reduction, every edge spanning more than one rank is
+//! broken into unit segments by [`insert_dummy_vertices`]. An initial order
+//! of the vertices within each rank is found via depth first search, and
+//! then improved by a bilayer sweep ([`reduce_crossings_bilayer_sweep`]):
+//! the sweep runs down and up the layers alternately, reordering each layer
+//! by a sort key computed from the neighbor positions in the previously
+//! visited layer ([`barycenter`] or [`median`]), optionally followed by a
+//! [`transpose`] step that swaps adjacent vertices while doing so reduces
+//! crossings. The sweep stops after 4 iterations without improvement, and
+//! the best order seen is kept.
+//!
+//! Crossings between two layers are counted with the accumulator tree
+//! technique from the paper "Simple and Efficient Bilayer Cross Counting"
+//! by Barth, Mutzel and Jünger
+//! ([link](https://doi.org/10.7155/jgaa.00088)).
+
 #[cfg(test)]
 mod tests;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 use log::{debug, info, trace};
 use petgraph::algo::toposort;
@@ -14,16 +32,24 @@ use crate::util::{iterate, radix_sort, IterDir};
 
 use super::{Edge, Vertex};
 
+/// An order of the vertices of a layered graph: the layers from top to
+/// bottom, each layer holding its vertices from left to right.
+///
+/// Alongside the layers, the position of every vertex within its layer is
+/// kept, so neighbor positions can be looked up in O(1); the invariant is
+/// `position(v) == index of v within its layer`. The mutating methods keep
+/// the two in sync, which is why the layers are only handed out immutably
+/// (via [`Order::layers`] or the [`Deref`] impl to `Vec<Vec<NodeIndex>>`).
 #[derive(Clone)]
-struct Order {
-    _inner: Vec<Vec<NodeIndex>>,
+pub struct Order {
+    layers: Vec<Vec<NodeIndex>>,
     positions: HashMap<NodeIndex, usize>,
 }
 
 impl Display for Order {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = String::new();
-        for row in &self._inner {
+        for row in &self.layers {
             for c in row {
                 s.push_str(&c.index().to_string());
                 s.push(',')
@@ -35,31 +61,61 @@ impl Display for Order {
 }
 
 impl Order {
-    fn new(layers: Vec<Vec<NodeIndex>>) -> Self {
+    /// Creates an order from the given layers, deriving the vertex
+    /// positions. A vertex must appear in the layers exactly once.
+    pub fn new(layers: Vec<Vec<NodeIndex>>) -> Self {
         let mut positions = HashMap::new();
         for l in &layers {
             for (pos, v) in l.iter().enumerate() {
                 positions.insert(*v, pos);
             }
         }
-        Self {
-            _inner: layers,
-            positions,
-        }
+        Self { layers, positions }
+    }
+
+    /// The layers from top to bottom, each holding its vertices from left to
+    /// right.
+    pub fn layers(&self) -> &[Vec<NodeIndex>] {
+        &self.layers
+    }
+
+    /// Consumes the order, returning the layers.
+    pub fn into_layers(self) -> Vec<Vec<NodeIndex>> {
+        self.layers
+    }
+
+    /// The position of the vertex within its layer, or [None] if the vertex
+    /// is not part of the order.
+    pub fn position(&self, vertex: NodeIndex) -> Option<usize> {
+        self.positions.get(&vertex).copied()
     }
 
     fn max_rank(&self) -> usize {
         self.len()
     }
 
-    fn exchange(&mut self, a: usize, b: usize, r: usize) {
+    /// Swaps the vertices at positions `a` and `b` of the layer with rank
+    /// `r`, keeping the tracked positions in sync.
+    pub fn exchange(&mut self, a: usize, b: usize, r: usize) {
         // first update positions, then swap
-        *self.positions.get_mut(&self._inner[r][a]).unwrap() = b;
-        *self.positions.get_mut(&self._inner[r][b]).unwrap() = a;
-        self._inner[r].swap(a, b);
+        *self.positions.get_mut(&self.layers[r][a]).unwrap() = b;
+        *self.positions.get_mut(&self.layers[r][b]).unwrap() = a;
+        self.layers[r].swap(a, b);
     }
 
-    fn cross_count_two_vertices(
+    /// The number of crossings among the edges incident to `v` and `w`
+    /// themselves if `v` sat immediately left of `w`. Crossings involving
+    /// edges of other vertices are **not** counted, so this is not a
+    /// per-layer crossing total (use [`Order::bilayer_cross_count`] for
+    /// that) — but it is sufficient for [`transpose`] to decide whether
+    /// swapping two adjacent vertices pays off, which is what it is used
+    /// for. Assumes every edge connects adjacent ranks (guaranteed after
+    /// [`insert_dummy_vertices`]).
+    ///
+    /// # Panics
+    ///
+    /// Panics if any neighbor of `v` or `w` is not part of the order.
+    pub fn cross_count_two_vertices(
         &self,
         v: NodeIndex,
         w: NodeIndex,
@@ -100,7 +156,15 @@ impl Order {
         all_crossings
     }
 
-    fn crossings(&self, graph: &StableDiGraph<Vertex, Edge>) -> usize {
+    /// The total number of edge crossings in this order, summed over all
+    /// pairs of neighboring layers via [`Order::bilayer_cross_count`] — see
+    /// there for which edges are counted (edges the order does not fully
+    /// cover are silently skipped).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the order contains no layers.
+    pub fn crossings(&self, graph: &StableDiGraph<Vertex, Edge>) -> usize {
         let mut cross_count = 0;
         for rank in 0..self.max_rank() - 1 {
             cross_count += self.bilayer_cross_count(graph, rank);
@@ -108,7 +172,25 @@ impl Order {
         cross_count
     }
 
-    fn bilayer_cross_count(&self, graph: &StableDiGraph<Vertex, Edge>, rank: usize) -> usize {
+    /// The number of crossings between the layers with rank `rank` and
+    /// `rank + 1`, counted with the accumulator tree technique by Barth,
+    /// Mutzel and Jünger (see the [module docs](self)). Only edges between
+    /// vertices on the two ranks are counted, so exact totals for long edges
+    /// require the dummy vertices of [`insert_dummy_vertices`].
+    ///
+    /// Edges are matched via the endpoints' [`Vertex::rank`] fields (only a
+    /// rank difference of exactly 1 counts), and an endpoint the order does
+    /// not track is silently skipped. The rank fields must therefore agree
+    /// with the order's layer grouping (as the layers of [`ordering`] do)
+    /// and every vertex must appear in the order — otherwise the count is
+    /// silently too low. (Unlike [`Order::cross_count_two_vertices`], which
+    /// panics on untracked neighbors.)
+    ///
+    /// # Panics
+    ///
+    /// Panics unless both `rank` and `rank + 1` are layers of the order,
+    /// i.e. `rank + 1` must be less than the number of layers.
+    pub fn bilayer_cross_count(&self, graph: &StableDiGraph<Vertex, Edge>, rank: usize) -> usize {
         // find initial edge order
         let north = &self[rank];
         let south = &self[rank + 1];
@@ -166,40 +248,31 @@ impl Order {
         }
         cross_count
     }
-
-    #[allow(dead_code)]
-    fn print(&self) {
-        for line in &self._inner {
-            for v in line {
-                print!("{v:>2?} ");
-            }
-            println!();
-        }
-    }
 }
 
+/// Read-only access to the layers; mutation must go through the [`Order`]
+/// methods, which keep the tracked vertex positions in sync.
 impl Deref for Order {
     type Target = Vec<Vec<NodeIndex>>;
 
     fn deref(&self) -> &Self::Target {
-        &self._inner
+        &self.layers
     }
 }
 
-impl DerefMut for Order {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self._inner
-    }
-}
-
-pub(super) fn insert_dummy_vertices(graph: &mut StableDiGraph<Vertex, Edge>, dummy_size: f64) {
-    // find all edges that span more than one rank and insert dummy vertices
-    // on every rank in between. For a weakly connected graph this also
-    // guarantees that no rank is empty: any would-be-empty rank is crossed by
-    // some edge, which now receives a dummy vertex on that rank. (With
-    // Config::divide_components disabled the graph may be disconnected and
-    // ranks can stay empty; empty ranks are dropped when the y-coordinates
-    // are computed.)
+/// Replaces every edge spanning more than one rank with a chain of dummy
+/// vertices ([`Vertex::is_dummy`], created with size `(dummy_size, 0.0)`)
+/// and unit-length edges, one dummy per intermediate rank. Requires ranks
+/// from phase 1 ([`super::p1_layering`]).
+///
+/// For a weakly connected graph this also guarantees that no rank is empty:
+/// any would-be-empty rank is crossed by some edge, which now receives a
+/// dummy vertex on that rank. (With [`crate::configure::Config::divide_components`]
+/// disabled the graph may be disconnected; the same argument covers each
+/// component's own rank range, and the supported ranking types leave no gap
+/// between those ranges. Empty ranks do arise when the dummies are removed
+/// again — see [`remove_dummy_vertices`].)
+pub fn insert_dummy_vertices(graph: &mut StableDiGraph<Vertex, Edge>, dummy_size: f64) {
     info!(target: "crossing_reduction", "Inserting dummy vertices for edges spanning more than 1 rank");
     for edge in graph.edge_indices().collect::<Vec<_>>() {
         let (mut tail, head) = graph.edge_endpoints(edge).unwrap();
@@ -213,7 +286,6 @@ pub(super) fn insert_dummy_vertices(graph: &mut StableDiGraph<Vertex, Edge>, dum
             // we don't need to remember edges that where removed
             graph.remove_edge(edge);
             for rank in (graph[tail].rank + 1)..graph[head].rank {
-                // usize usize::MAX id as reserved value for a dummy vertex
                 let d = Vertex {
                     is_dummy: true,
                     size: (dummy_size, 0.0),
@@ -232,7 +304,30 @@ pub(super) fn insert_dummy_vertices(graph: &mut StableDiGraph<Vertex, Edge>, dum
     }
 }
 
-pub(super) fn remove_dummy_vertices(
+/// The inverse of [`insert_dummy_vertices`] structurally: replaces each
+/// dummy chain with a single edge between the chain's endpoints, then
+/// removes all dummy vertices from the graph and from the given layers.
+/// The recreated edges carry default weights ([`Edge::default`], weight 1)
+/// — the original edge weights are **not** preserved (they were already
+/// discarded by [`insert_dummy_vertices`]), so a subsequent
+/// [`RankingType::MinimizeEdgeLength`][crate::configure::RankingType]
+/// ranking sees default weights (and requires the scratch-state
+/// preconditions of [`super::p1_layering::rank`]).
+///
+/// This can leave layers empty (a rank whose only occupants were dummy
+/// vertices, which happens whenever an edge spanned that rank without a
+/// vertex on it). Phase 3
+/// ([`super::p3_calculate_coordinates::create_layouts`]) requires every
+/// layer to be non-empty, so when driving the phases manually, drop empty
+/// layers before continuing; [`super::execute_phase_3`] does so itself.
+///
+/// # Panics
+///
+/// Panics if the graph is cyclic, or if a vertex marked
+/// [`Vertex::is_dummy`] has no outgoing neighbor — every dummy must lie on
+/// a chain as created by [`insert_dummy_vertices`], with exactly one
+/// outgoing edge.
+pub fn remove_dummy_vertices(
     graph: &mut StableDiGraph<Vertex, Edge>,
     order: &mut [Vec<NodeIndex>],
 ) {
@@ -267,7 +362,25 @@ pub(super) fn remove_dummy_vertices(
 }
 
 // TODO: Maybe write store all upper neighbors on vertex directly
-pub(super) fn ordering(
+/// The main entry point of the phase: computes the final order of the
+/// vertices within each rank, returning the layers top-to-bottom with each
+/// layer ordered left-to-right. Requires ranks from phase 1; run
+/// [`insert_dummy_vertices`] first for exact crossing counts on long edges
+/// (and, when ranks may be empty, to make [`transpose`] safe — see below).
+///
+/// With [`CrossingMinimization::None`] the initial depth-first-search order
+/// of [`init_order`] is returned untouched (and `transpose` has no effect);
+/// otherwise the order is improved via
+/// [`reduce_crossings_bilayer_sweep`].
+///
+/// # Panics
+///
+/// Panics if the graph is empty, or if any rank has no vertices while
+/// `transpose` is enabled. An empty rank arises when an edge spans more
+/// than one rank and no other vertex sits on a rank in between; running
+/// [`insert_dummy_vertices`] first places a dummy vertex on every such
+/// rank, which for weakly connected graphs guarantees no rank is empty.
+pub fn ordering(
     graph: &mut StableDiGraph<Vertex, Edge>,
     crossing_minimization: CrossingMinimization,
     transpose: bool,
@@ -277,16 +390,28 @@ pub(super) fn ordering(
     let cm_method = match crossing_minimization {
         CrossingMinimization::Barycenter => self::barycenter,
         CrossingMinimization::Median => self::median,
-        CrossingMinimization::None => return order._inner,
+        CrossingMinimization::None => return order.into_layers(),
     };
     let order = reduce_crossings_bilayer_sweep(graph, order, cm_method, transpose);
-    order._inner
+    order.into_layers()
 }
 
-type CMMethod =
+/// A crossing minimization heuristic, the extension point of
+/// [`reduce_crossings_bilayer_sweep`] and [`order_layer`]: given the graph,
+/// a vertex, the sweep direction (`true` when sweeping downwards) and the
+/// current position of every vertex within its layer, it returns the sort
+/// key the vertex's layer is reordered by. [`barycenter`] and [`median`] are
+/// the built-in implementations.
+pub type CMMethod =
     fn(&StableDiGraph<Vertex, Edge>, NodeIndex, bool, &HashMap<NodeIndex, usize>) -> f64;
 
-fn init_order(graph: &StableDiGraph<Vertex, Edge>) -> Order {
+/// Builds the initial order: vertices are assigned to the layer matching
+/// their rank, in depth-first-search order. Requires ranks from phase 1.
+///
+/// # Panics
+///
+/// Panics if the graph is empty or a rank is negative.
+pub fn init_order(graph: &StableDiGraph<Vertex, Edge>) -> Order {
     info!(target: "crossing_reduction", 
         "Initializing order of vertices in each rank via dfs.");
 
@@ -321,7 +446,12 @@ fn init_order(graph: &StableDiGraph<Vertex, Edge>) -> Order {
     Order::new(order)
 }
 
-fn reduce_crossings_bilayer_sweep(
+/// Improves an order by sweeping down and up the layers alternately,
+/// reordering each layer with [`order_layer`] (and, if `transpose` is
+/// enabled, swapping adjacent vertices via [`transpose`] after every sweep).
+/// Stops after 4 sweeps without improvement and returns the best order seen,
+/// judged by [`Order::crossings`].
+pub fn reduce_crossings_bilayer_sweep(
     graph: &StableDiGraph<Vertex, Edge>,
     mut order: Order,
     cm_method: CMMethod,
@@ -355,8 +485,18 @@ fn reduce_crossings_bilayer_sweep(
     best
 }
 
-fn transpose(graph: &StableDiGraph<Vertex, Edge>, order: &mut Order, move_down: bool) {
-    trace!(target: "crossings_reduction", 
+/// Greedily swaps adjacent vertices within each layer as long as a swap
+/// reduces the crossing count (judged via
+/// [`Order::cross_count_two_vertices`]), visiting the layers top-to-bottom
+/// when `move_down` is set and bottom-to-top otherwise. Described as the
+/// `transpose` procedure in the paper by Gansner et al.
+///
+/// # Panics
+///
+/// Panics if any layer of the order is empty (see [`ordering`] on how
+/// [`insert_dummy_vertices`] prevents empty layers).
+pub fn transpose(graph: &StableDiGraph<Vertex, Edge>, order: &mut Order, move_down: bool) {
+    trace!(target: "crossings_reduction",
         "Using transpose, try to swap vertices in each layer manually to reduce cross count");
 
     let mut improved = true;
@@ -370,9 +510,9 @@ fn transpose(graph: &StableDiGraph<Vertex, Edge>, order: &mut Order, move_down: 
         improved = false;
         for r in iterate(iter_dir, order.max_rank()) {
             trace!(target: "reduce_crossings", "Transpose vertices in rank {r}");
-            for i in 0..order._inner[r].len() - 1 {
-                let v = order._inner[r][i];
-                let w = order._inner[r][i + 1];
+            for i in 0..order.layers[r].len() - 1 {
+                let v = order.layers[r][i];
+                let w = order.layers[r][i + 1];
                 let v_w_crossing = order.cross_count_two_vertices(v, w, graph);
                 let w_v_crossing = order.cross_count_two_vertices(w, v, graph);
                 if v_w_crossing > w_v_crossing {
@@ -385,7 +525,16 @@ fn transpose(graph: &StableDiGraph<Vertex, Edge>, order: &mut Order, move_down: 
     }
 }
 
-fn order_layer(
+/// Performs one sweep of the crossing minimization: every layer (except the
+/// starting one) is reordered by the sort key `cm_method` computes from the
+/// neighbor positions in the previously visited layer. Sweeps top-to-bottom
+/// when `move_down` is set, bottom-to-top otherwise, and returns the new
+/// order.
+///
+/// # Panics
+///
+/// Panics if the order contains no layers.
+pub fn order_layer(
     graph: &StableDiGraph<Vertex, Edge>,
     move_down: bool,
     cur_order: &Order,
@@ -394,10 +543,10 @@ fn order_layer(
     let mut new_order = vec![Vec::new(); cur_order.max_rank()];
     let mut positions = cur_order.positions.clone();
     let dir: Vec<usize> = if move_down {
-        new_order[0].clone_from(&cur_order._inner[0]);
+        new_order[0].clone_from(&cur_order.layers[0]);
         (1..cur_order.max_rank()).collect()
     } else {
-        new_order[cur_order.max_rank() - 1].clone_from(&cur_order._inner[cur_order.max_rank() - 1]);
+        new_order[cur_order.max_rank() - 1].clone_from(&cur_order.layers[cur_order.max_rank() - 1]);
         (0..cur_order.max_rank() - 1).rev().collect()
     };
 
@@ -417,7 +566,8 @@ fn order_layer(
             .map(|n| (*n, cm_method(graph, *n, move_down, &positions)))
             .collect::<HashMap<NodeIndex, f64>>();
 
-        new_order[rank].sort_by(|a, b| ordering.get(a).unwrap().total_cmp(ordering.get(b).unwrap()));
+        new_order[rank]
+            .sort_by(|a, b| ordering.get(a).unwrap().total_cmp(ordering.get(b).unwrap()));
 
         new_order[rank].iter().enumerate().for_each(|(pos, v)| {
             positions.insert(*v, pos);
@@ -434,34 +584,47 @@ fn order_layer(
     Order::new(new_order)
 }
 
-fn barycenter(
+/// The barycenter heuristic ([`CrossingMinimization::Barycenter`]), a
+/// [`CMMethod`]: the average of the positions of the vertex's neighbors on
+/// the adjacent rank in the sweep direction (incoming neighbors when
+/// sweeping down, outgoing when sweeping up). A vertex without neighbors on
+/// that rank keeps its current position.
+pub fn barycenter(
     graph: &StableDiGraph<Vertex, Edge>,
     vertex: NodeIndex,
     move_down: bool,
     positions: &HashMap<NodeIndex, usize>,
 ) -> f64 {
-    let neighbors: Vec<_> = if move_down {
-        graph.neighbors_directed(vertex, Incoming).collect()
+    let neighbors = if move_down {
+        graph.neighbors_directed(vertex, Incoming)
     } else {
-        graph.neighbors_directed(vertex, Outgoing).collect()
+        graph.neighbors_directed(vertex, Outgoing)
     };
-
-    if neighbors.is_empty() {
-        return *positions.get(&vertex).unwrap() as f64;
-    }
 
     // Only look at direct neighbors
     let adjacent = neighbors
-        .into_iter()
-        // .filter(|n| graph[vertex].rank.abs_diff(graph[*n].rank) == 1)
+        .filter(|n| graph[vertex].rank.abs_diff(graph[*n].rank) == 1)
         .map(|n| *positions.get(&n).unwrap())
         .collect::<Vec<usize>>();
 
-    let bary = adjacent.iter().sum::<usize>() as f64 / adjacent.len() as f64;
-    bary
+    if adjacent.is_empty() {
+        // no neighbors on the adjacent rank in the sweep direction: keep the
+        // current position
+        return *positions.get(&vertex).unwrap() as f64;
+    }
+
+    adjacent.iter().sum::<usize>() as f64 / adjacent.len() as f64
 }
 
-fn median(
+/// The weighted median heuristic ([`CrossingMinimization::Median`]) from the
+/// paper by Gansner et al., a [`CMMethod`]: the median position of the
+/// vertex's neighbors on the adjacent rank in the sweep direction. With an
+/// even number of neighbors the two medians are interpolated, weighted by
+/// how tightly the neighbor positions cluster on each side; when the
+/// interpolation weights are both zero (e.g. duplicate positions from
+/// parallel edges), the plain average of the two medians is used. A vertex
+/// without neighbors in the sweep direction keeps its current position.
+pub fn median(
     graph: &StableDiGraph<Vertex, Edge>,
     vertex: NodeIndex,
     move_down: bool,

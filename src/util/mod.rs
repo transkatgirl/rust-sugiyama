@@ -1,8 +1,17 @@
+//! Graph and iteration helpers shared by the layout phases.
+
 use std::collections::HashSet;
 
 use log::{debug, info};
 use petgraph::stable_graph::{NodeIndex, StableDiGraph};
 
+/// Splits a graph into its weakly connected components (the subgraphs that
+/// are connected when edge directions are ignored).
+///
+/// The [`NodeIndex`] values of the input graph are preserved: each component
+/// is built with [`StableDiGraph::filter_map`], which keeps the indices of
+/// the retained vertices stable. Vertex and edge weights are copied over
+/// unchanged.
 pub fn weakly_connected_components<V: Copy, E: Copy>(
     graph: StableDiGraph<V, E>,
 ) -> Vec<StableDiGraph<V, E>> {
@@ -71,10 +80,8 @@ fn into_weakly_connected_components_two_components() {
     assert!(sgs[1].contains_edge(4.into(), 6.into()));
 }
 
-// TODO: refactor into trait
-// disable warnings, since we might still need this someday
-#[allow(dead_code)]
-pub(super) fn iterate(dir: IterDir, length: usize) -> impl Iterator<Item = usize> {
+// yields the indices 0..length either in order or reversed
+pub(crate) fn iterate(dir: IterDir, length: usize) -> impl Iterator<Item = usize> {
     let (mut start, step) = match dir {
         IterDir::Forward => (usize::MAX, 1), // up corresponds to left to right
         IterDir::Backward => (length, usize::MAX),
@@ -86,15 +93,16 @@ pub(super) fn iterate(dir: IterDir, length: usize) -> impl Iterator<Item = usize
     .take(length)
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub(super) enum IterDir {
+pub(crate) enum IterDir {
     Forward,
     Backward,
 }
 
 // TODO: implement this with binary and see if it is faster
-pub(super) fn radix_sort(mut input: Vec<usize>, key_length: usize) -> Vec<usize> {
+// LSD radix sort on decimal digits; key_length must cover the digit count of
+// the largest element
+pub(crate) fn radix_sort(mut input: Vec<usize>, key_length: usize) -> Vec<usize> {
     let mut output = vec![0; input.len()];
 
     let mut key = 1;

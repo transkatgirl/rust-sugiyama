@@ -1,17 +1,36 @@
+#![doc = include_str!("../README.md")]
+#![warn(missing_docs)]
+
 use std::collections::HashMap;
 
 use algorithm::{Edge, Vertex};
 
-use configure::Config;
 use log::info;
 use petgraph::{graph::NodeIndex, stable_graph::StableDiGraph};
 
-mod algorithm;
+pub mod algorithm;
 pub mod configure;
-mod util;
+pub mod util;
 
-type Layout = (Vec<(usize, (f64, f64))>, f64, f64);
-type Layouts<T> = Vec<(Vec<(T, (f64, f64))>, f64, f64)>;
+pub use petgraph;
+
+pub use configure::{Config, CrossingMinimization, PairSeparation, RankingType};
+
+/// The layout of a single (sub)graph: the laid out vertices as
+/// `(id, (x, y))` pairs, followed by the width and the height of the layout.
+///
+/// The coordinates are the vertex centers, in the geometric units that the
+/// vertex sizes and [`Config::vertex_spacing`] are expressed in. `width` and
+/// `height` however are vertex and layer *counts*, not geometric extents;
+/// see [`from_edges`] for the exact semantics.
+pub type Layout = (Vec<(usize, (f64, f64))>, f64, f64);
+
+/// A list of [`Layout`]s, one per weakly connected component of the input
+/// (or at most one for the whole graph when
+/// [`Config::divide_components`] is disabled — an empty graph yields no
+/// layouts), generic over the vertex id
+/// type `T` (`usize` in general, [`NodeIndex`] for [`from_graph`]).
+pub type Layouts<T> = Vec<(Vec<(T, (f64, f64))>, f64, f64)>;
 
 /// Creates a graph layout from edges, which are given as a `&[(u32, u32)]`.
 ///
@@ -38,6 +57,10 @@ type Layouts<T> = Vec<(Vec<(T, (f64, f64))>, f64, f64)>;
 /// Edges whose tail and head are the same vertex cannot be drawn in a layered
 /// layout and are ignored: the vertex is laid out as if the edge did not
 /// exist.
+///
+/// # Panics
+///
+/// Panics if `config` is invalid; see [`algorithm::build_layout`].
 pub fn from_edges(edges: &[(u32, u32)], config: &Config) -> Layouts<usize> {
     info!(target: "initializing", "Creating new layout from edges, containing {} edges", edges.len());
     let graph = StableDiGraph::from_edges(edges);
@@ -53,14 +76,18 @@ pub fn from_edges(edges: &[(u32, u32)], config: &Config) -> Layouts<usize> {
 /// The returned `width` and `height` are vertex and layer counts, not
 /// geometric extents, and self-loops in `graph` are ignored; see
 /// [`from_edges`] for the exact semantics.
+///
+/// # Panics
+///
+/// Panics if `config` is invalid; see [`algorithm::build_layout`].
 pub fn from_graph<V, E>(
     graph: &StableDiGraph<V, E>,
     vertex_size: &impl Fn(NodeIndex, &V) -> (f64, f64),
     config: &Config,
 ) -> Layouts<NodeIndex> {
-    info!(target: "initializing", 
-        "Creating new layout from existing graph, containing {} vertices and {} edges.", 
-        graph.node_count(), 
+    info!(target: "initializing",
+        "Creating new layout from existing graph, containing {} vertices and {} edges.",
+        graph.node_count(),
         graph.edge_count());
 
     let graph = graph.map(
@@ -99,15 +126,16 @@ pub fn from_graph<V, E>(
 ///
 /// # Panics
 ///
-/// Panics if `edges` contain vertices which are not contained in `vertices`
+/// Panics if `edges` contain vertices which are not contained in `vertices`,
+/// or if `config` is invalid (see [`algorithm::build_layout`]).
 pub fn from_vertices_and_edges<'a>(
     vertices: &'a [(u32, (f64, f64))],
     edges: &'a [(u32, u32)],
     config: &Config,
 ) -> Layouts<usize> {
-    info!(target: "initializing", 
-        "Creating new layout from existing graph, containing {} vertices and {} edges.", 
-        vertices.len(), 
+    info!(target: "initializing",
+        "Creating new layout from existing graph, containing {} vertices and {} edges.",
+        vertices.len(),
         edges.len());
 
     let mut graph = StableDiGraph::new();
@@ -133,6 +161,19 @@ fn run_algo_empty_graph() {
     let edges = [];
     let g = from_edges(&edges, &Config::default());
     assert!(g.is_empty());
+}
+
+// the documented invalid-config panic holds even when the graph is empty
+#[test]
+#[should_panic(expected = "minimum_length must be at least 1")]
+fn run_algo_empty_graph_invalid_config() {
+    let _ = from_edges(
+        &[],
+        &Config {
+            minimum_length: 0,
+            ..Default::default()
+        },
+    );
 }
 
 // pins the documented self-loop semantics: the loop edge is ignored, the
@@ -278,7 +319,7 @@ mod benchmark {
 mod check_visuals {
 
     use crate::{
-        configure::{Config, CrossingMinimization, RankingType},
+        configure::{Config, CrossingMinimization, PairSeparation, RankingType},
         from_vertices_and_edges,
     };
 
@@ -286,15 +327,7 @@ mod check_visuals {
 
     #[test]
     fn test_crossing_minimization_disabled() {
-        let edges = [
-            (0, 1),
-            (1, 2),
-            (2, 3),
-            (2, 4),
-            (3, 5),
-            (4, 5),
-            (0, 5),
-        ];
+        let edges = [(0, 1), (1, 2), (2, 3), (2, 4), (3, 5), (4, 5), (0, 5)];
         let layouts = from_edges(
             &edges,
             &Config {
@@ -325,8 +358,9 @@ mod check_visuals {
         let edges = [(0, 1), (1, 2), (2, 3), (3, 4), (0, 5)];
 
         // lays out the graph, checks that vertices sharing a rank don't
-        // overlap horizontally, and returns the layout's geometric width
-        let run = |per_pair_separation: bool| {
+        // overlap horizontally (and keep the explicit gap, when one is
+        // configured), and returns the layout's geometric width
+        let run = |per_pair_separation: Option<PairSeparation>| {
             let layouts = from_vertices_and_edges(
                 &vertices,
                 &edges,
@@ -339,19 +373,25 @@ mod check_visuals {
             let (layout, _, _) = layouts.into_iter().next().unwrap();
             assert_eq!(layout.len(), 6);
 
-            // width of each vertex as phase 3 sees it: the input width plus
-            // the default vertex spacing
-            let width = |id: usize| vertices[id].1 .0 + 10.0;
+            // width of each vertex as phase 3 sees it: in block-max mode the
+            // input width padded with the default vertex spacing, in per-pair
+            // mode the input width as-is
+            let width = |id: usize| match per_pair_separation {
+                None => vertices[id].1 .0 + 10.0,
+                Some(_) => vertices[id].1 .0,
+            };
+            // there are no dummies in this graph (every edge spans one
+            // rank), so only the vertex gap applies
+            let gap = per_pair_separation.map_or(0.0, |gaps| gaps.vertex_gap);
 
             let mut entries = layout;
-            entries.sort_by(|(_, (ax, ay)), (_, (bx, by))| {
-                (ay, ax).partial_cmp(&(by, bx)).unwrap()
-            });
+            entries
+                .sort_by(|(_, (ax, ay)), (_, (bx, by))| (ay, ax).partial_cmp(&(by, bx)).unwrap());
             for pair in entries.windows(2) {
                 let (a, (ax, ay)) = pair[0];
                 let (b, (bx, by)) = pair[1];
                 if ay == by {
-                    assert!(bx - ax >= (width(a) + width(b)) * 0.5 - 1e-9);
+                    assert!(bx - ax >= (width(a) + width(b)) * 0.5 + gap - 1e-9);
                 }
             }
 
@@ -366,8 +406,11 @@ mod check_visuals {
             right - left
         };
 
-        let block_max_width = run(false);
-        let per_pair_width = run(true);
+        let block_max_width = run(None);
+        let per_pair_width = run(Some(PairSeparation {
+            vertex_gap: 10.0,
+            edge_gap: 5.0,
+        }));
         assert!(
             per_pair_width < block_max_width,
             "per-pair layout ({per_pair_width}) should be narrower than block-max ({block_max_width})"
@@ -522,6 +565,25 @@ mod check_visuals {
                 assert_eq!(y, 20.0)
             }
         }
+    }
+
+    // regression test: the shift-to-zero minimum used to include dummy
+    // vertices, leaving the leftmost real vertex at x > 0 when an edge
+    // routing occupied the left margin
+    #[test]
+    fn leftmost_real_vertex_at_zero() {
+        let edges = [(0, 1), (0, 2), (1, 3), (2, 3), (0, 3)];
+        let layouts = from_edges(&edges, &Config::default());
+        assert_eq!(layouts.len(), 1);
+        let min_x = layouts[0]
+            .0
+            .iter()
+            .map(|(_, (x, _))| *x)
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            min_x.abs() < 1e-9,
+            "leftmost real vertex should sit at x = 0, got {min_x}"
+        );
     }
 
     #[test]

@@ -1,20 +1,30 @@
-// TODOS: Keep non graph edges during rank() procedure in vecdeque to be able to cyclically search through them
-//! Executes the second phase of sugiyamas algorithm, which assigns each vertex
-//! a rank.
-//! Currently three ranking algorithm are implmented:
+//! Phase 1 of the algorithm: layering (ranking), which assigns each vertex
+//! a rank ([`super::Vertex::rank`]).
 //!
-//! 1. Original - places each vertex at the midpoint of the highest and lowest
-//!    rank it can occupy (the Up and Down rankings).
-//! 2. MinimizeEdgeLength - builds a feasible tight tree in order to minimize
-//!    edge lengths. This is the technique describe in the paper by Gansner et al.
-//! 3. Up - Move vertices as far up as possible
-//! 4. Down - Move vertices as far down as possible.
+//! Four ranking algorithms are implemented, selected via
+//! [`RankingType`]:
 //!
+//! 1. [`RankingType::Original`] - places each vertex at the midpoint of the
+//!    highest and lowest rank it can occupy (the Up and Down rankings).
+//! 2. [`RankingType::MinimizeEdgeLength`] - minimizes the weighted sum of
+//!    edge lengths via the network simplex technique described in section
+//!    4.2 of the 1993 paper "A technique for drawing directed graphs" by
+//!    Gansner et al. ([link](https://ieeexplore.ieee.org/document/221135)):
+//!    starting from a feasible tight spanning tree, tree edges with negative
+//!    cut values are iteratively exchanged against the non-tree edge with
+//!    minimum slack until no negative cut value remains.
+//! 3. [`RankingType::Up`] - moves vertices as far up as possible.
+//! 4. [`RankingType::Down`] - moves vertices as far down as possible.
+
+// TODO: Keep non graph edges during rank() procedure in vecdeque to be able
+// to cyclically search through them
 mod cut_values;
 mod low_lim;
 pub(super) mod ranking;
 #[cfg(test)]
 pub(crate) mod tests;
+
+pub use ranking::{init_rank, move_vertices_down, move_vertices_up};
 
 use log::info;
 use petgraph::stable_graph::{EdgeIndex, NodeIndex, StableDiGraph};
@@ -24,11 +34,47 @@ use crate::configure::RankingType;
 
 use self::cut_values::update_cutvalues;
 use self::low_lim::update_low_lim;
-use self::ranking::{feasible_tree, init_rank, move_vertices_down, move_vertices_up, update_ranks};
+use self::ranking::{feasible_tree, update_ranks};
 
 use super::{slack, Edge, Vertex};
 
-pub(super) fn rank(
+/// Assigns each vertex a rank ([`super::Vertex::rank`]) according to the
+/// given [`RankingType`]; ranks are 0-based after normalization, with edges
+/// pointing from lower to higher ranks. The
+/// [`RankingType::MinimizeEdgeLength`] strategy respects the edge weights
+/// ([`super::Edge::weight`]).
+///
+/// # Preconditions
+///
+/// The graph must be acyclic — run [`super::p0_cycle_removal`] first; a
+/// cyclic graph panics (see below). `minimum_length` must be at least 1;
+/// this is not checked, and violations silently produce broken rankings
+/// (with `minimum_length` below 1, all vertices may end up on a single
+/// rank).
+///
+/// Every vertex's rank must still be at its initial value `0` (the
+/// [`super::Vertex`] default; note that [`super::init_graph`] does **not**
+/// reset it). The existing ranks are read as input — the initial ranking
+/// keeps the rank of vertices without incoming edges — so pre-seeded ranks
+/// shift the entire ranking and can produce leading empty ranks, which
+/// later phases reject.
+///
+/// The internal network simplex scratch state (spanning tree membership,
+/// cut values, low/lim numbers) read by
+/// [`RankingType::MinimizeEdgeLength`] must likewise be at its
+/// [`super::Vertex`] / [`super::Edge`] defaults; neither
+/// [`super::init_graph`] nor this function resets it. Re-running `rank()`
+/// on a graph that already went through a `MinimizeEdgeLength` ranking
+/// treats the leftover spanning tree as already optimal and silently
+/// returns a feasible but un-minimized ranking.
+///
+/// # Panics
+///
+/// Panics if the graph is cyclic (all ranking types), or — with
+/// [`RankingType::MinimizeEdgeLength`] — if the graph is empty or not
+/// weakly connected; the other ranking types treat an empty graph as a
+/// no-op.
+pub fn rank(
     graph: &mut StableDiGraph<Vertex, Edge>,
     minimum_length: i32,
     ranking_type: RankingType,
