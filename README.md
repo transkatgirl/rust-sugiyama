@@ -8,6 +8,8 @@ This is a fork of the [rust-sugiyama](https://crates.io/crates/rust-sugiyama) cr
 - Added Config::per_pair_separation
 - Access to the algorithm's internals
 
+This fork was made with **heavy** assistance from Claude Fable 5.
+
 The remainder of this README is adapted from `rust-sugiyama`.
 
 ## Description
