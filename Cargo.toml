@@ -1,6 +1,6 @@
 [package]
 name = "rust-sugiyama-fork"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 license = "MIT"
 authors = [
@@ -11,8 +11,8 @@ authors = [
 description = "Implementation of Sugiyama's algorithm to calculate coordinates of a directed graph"
 readme      = "README.md"
 
-homepage   = "https://github.com/paddison/rust-sugiyama"
-repository = "https://github.com/paddison/rust-sugiyama"
+homepage   = "https://github.com/transkatgirl/rust-sugiyama"
+repository = "https://github.com/transkatgirl/rust-sugiyama"
 
 keywords = [
 	"graph",
