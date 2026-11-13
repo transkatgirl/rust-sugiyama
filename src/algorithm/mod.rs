@@ -47,8 +47,12 @@
 //! let mut layers =
 //!     algorithm::p2_reduce_crossings::ordering(&mut graph, CrossingMinimization::Barycenter, true);
 //! // phase 3: four Brandes-Köpf candidate layouts, combined into x-coordinates
-//! let mut layouts =
-//!     algorithm::p3_calculate_coordinates::create_layouts(&mut graph, &mut layers, None);
+//! let mut layouts = algorithm::p3_calculate_coordinates::create_layouts(
+//!     &mut graph,
+//!     &mut layers,
+//!     None,
+//!     algorithm::p3_calculate_coordinates::MedianOrder::default(),
+//! );
 //! algorithm::p3_calculate_coordinates::align_to_smallest_width_layout(&graph, &mut layouts);
 //! let x_coordinates = algorithm::p3_calculate_coordinates::calculate_relative_coords(layouts);
 //! assert_eq!(x_coordinates.len(), graph.node_count());
@@ -436,7 +440,12 @@ pub fn execute_phase_3(
     // recorded, so the rest of the phase can rely on every layer being
     // occupied
     layers.retain(|l| !l.is_empty());
-    let mut layouts = p3::create_layouts(graph, &mut layers, per_pair_separation);
+    let mut layouts = p3::create_layouts(
+        graph,
+        &mut layers,
+        per_pair_separation,
+        p3::MedianOrder::default(),
+    );
 
     p3::align_to_smallest_width_layout(graph, &mut layouts);
     // dummy vertices are never part of the returned layout and nothing below

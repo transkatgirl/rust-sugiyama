@@ -7,8 +7,9 @@ This is a fork of the [rust-sugiyama](https://crates.io/crates/rust-sugiyama) cr
 - Added Config::divide_components
 - Added Config::per_pair_separation
 - Access to the algorithm's internals
+    - Added MedianOrder to create_layouts
 
-This fork was made with **heavy** assistance from Claude Fable 5.
+This fork was made with **heavy** assistance from Claude Fable 5 and Claude Fable 5.2.
 
 The remainder of this README is adapted from `rust-sugiyama`.
 
@@ -170,8 +171,12 @@ algorithm::p1_layering::rank(&mut graph, 1, RankingType::MinimizeEdgeLength);
 algorithm::p2_reduce_crossings::insert_dummy_vertices(&mut graph, 1.0);
 let mut layers =
     algorithm::p2_reduce_crossings::ordering(&mut graph, CrossingMinimization::Barycenter, true);
-let mut layouts =
-    algorithm::p3_calculate_coordinates::create_layouts(&mut graph, &mut layers, None);
+let mut layouts = algorithm::p3_calculate_coordinates::create_layouts(
+    &mut graph,
+    &mut layers,
+    None,
+    algorithm::p3_calculate_coordinates::MedianOrder::default(),
+);
 algorithm::p3_calculate_coordinates::align_to_smallest_width_layout(&graph, &mut layouts);
 let x_coordinates = algorithm::p3_calculate_coordinates::calculate_relative_coords(layouts);
 assert_eq!(x_coordinates.len(), graph.node_count());

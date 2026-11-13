@@ -60,8 +60,12 @@ fn manual_pipeline() {
     // phase 3 produces four candidate layouts which combine into one finite
     // x-coordinate per vertex (including dummies)
     let mut layers = layers;
-    let mut layouts =
-        algorithm::p3_calculate_coordinates::create_layouts(&mut graph, &mut layers, None);
+    let mut layouts = algorithm::p3_calculate_coordinates::create_layouts(
+        &mut graph,
+        &mut layers,
+        None,
+        algorithm::p3_calculate_coordinates::MedianOrder::default(),
+    );
     assert_eq!(layouts.len(), 4);
     algorithm::p3_calculate_coordinates::align_to_smallest_width_layout(&graph, &mut layouts);
     let x_coordinates = algorithm::p3_calculate_coordinates::calculate_relative_coords(layouts);
@@ -103,6 +107,7 @@ fn manual_pipeline_per_pair_edge_gap() {
             vertex_gap: 7.0,
             edge_gap: 3.0,
         }),
+        algorithm::p3_calculate_coordinates::MedianOrder::default(),
     );
     algorithm::p3_calculate_coordinates::align_to_smallest_width_layout(&graph, &mut layouts);
     let x: std::collections::HashMap<_, _> =

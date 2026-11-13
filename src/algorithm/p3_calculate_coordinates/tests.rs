@@ -5,7 +5,7 @@ use crate::algorithm::p3_calculate_coordinates::{
 };
 use crate::configure::PairSeparation;
 
-use super::{reset_alignment, Edge, Vertex};
+use super::{reset_alignment, Edge, MedianOrder, Vertex};
 
 fn create_test_layout() -> (StableDiGraph<Vertex, Edge>, Vec<Vec<NodeIndex>>) {
     let edges: [(u32, u32); 30] = [
@@ -93,7 +93,7 @@ fn alignment_down_right() {
 
     // down right means no rotation
     reset_alignment(&mut g, &l);
-    create_vertical_alignments(&mut g, &mut l);
+    create_vertical_alignments(&mut g, &mut l, MedianOrder::default());
     // verify roots
     assert_eq!(g[NodeIndex::from(0)].root, 0.into());
     assert_eq!(g[NodeIndex::from(1)].root, 1.into());
@@ -158,7 +158,7 @@ fn alignment_down_left() {
     // down left means reverse each layer
     l.iter_mut().for_each(|l| l.reverse());
     reset_alignment(&mut g, &l);
-    create_vertical_alignments(&mut g, &mut l);
+    create_vertical_alignments(&mut g, &mut l, MedianOrder::default());
 
     // block root 0
     for n in [0, 6] {
@@ -223,7 +223,7 @@ fn alignment_up_right() {
     g.reverse();
     l.reverse();
     reset_alignment(&mut g, &l);
-    create_vertical_alignments(&mut g, &mut l);
+    create_vertical_alignments(&mut g, &mut l, MedianOrder::default());
 
     for n in [13, 10] {
         assert_eq!(g[NodeIndex::from(n)].root, 13.into())
@@ -275,7 +275,7 @@ fn alignment_up_left() {
     l.reverse();
     l.iter_mut().for_each(|l| l.reverse());
     reset_alignment(&mut g, &l);
-    create_vertical_alignments(&mut g, &mut l);
+    create_vertical_alignments(&mut g, &mut l, MedianOrder::default());
 
     for n in [15, 25, 9] {
         assert_eq!(g[NodeIndex::from(n)].root, 15.into())
@@ -322,7 +322,7 @@ fn alignment_up_left() {
 fn place_blocks() {
     let (mut g, mut l) = create_test_layout();
     mark_type_1_conflicts(&mut g, &mut l);
-    create_vertical_alignments(&mut g, &mut l);
+    create_vertical_alignments(&mut g, &mut l, MedianOrder::default());
 
     let block_1: Vec<NodeIndex> = [
         0, 1, 2, 3, 4, 5, 6, 8, 9, 12, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25,
@@ -356,7 +356,7 @@ fn create_layouts_marks_type_1_conflicts() {
         graph[v].pos = 0;
     }
 
-    let _ = super::create_layouts(&mut graph, &mut layers, None);
+    let _ = super::create_layouts(&mut graph, &mut layers, None, MedianOrder::default());
 
     assert!(graph[graph.find_edge(6.into(), 8.into()).unwrap()].has_type_1_conflict);
     assert!(graph[graph.find_edge(7.into(), 12.into()).unwrap()].has_type_1_conflict);
@@ -509,4 +509,54 @@ fn align_to_smallest_width_aligns_extents() {
     assert_eq!(layouts[1][&n1], 0.0);
     assert_eq!(layouts[3][&n0], -4.0);
     assert_eq!(layouts[3][&n1], -34.0);
+}
+
+#[test]
+fn median_order_selects_first_median_tried() {
+    // v has two upper neighbors, so both are medians: a real vertex on the
+    // left and a dummy on the right
+    let build = || {
+        let mut graph = StableDiGraph::<Vertex, Edge>::new();
+        // Nonzero widths keep the medians at distinct x-coordinates, so
+        // coordinate equality below identifies the selected median.
+        let real = graph.add_node(Vertex::new(0, (10.0, 10.0)));
+        let dummy = graph.add_node(Vertex {
+            is_dummy: true,
+            size: (10.0, 0.0),
+            ..Default::default()
+        });
+        let v = graph.add_node(Vertex::new(2, (10.0, 10.0)));
+        graph.add_edge(real, v, Edge::default());
+        graph.add_edge(dummy, v, Edge::default());
+        let layers = vec![vec![real, dummy], vec![v]];
+        reset_alignment(&mut graph, &layers);
+        (graph, layers, [real, dummy, v])
+    };
+
+    // by default the dummy wins, although the real vertex comes first
+    let (mut graph, mut layers, [real, dummy, v]) = build();
+    create_vertical_alignments(&mut graph, &mut layers, MedianOrder::PreferDummy);
+    assert_eq!(graph[v].root, dummy);
+    assert_eq!(graph[real].align, real);
+
+    // in edge order the left median is tried (and aligned with) first
+    let (mut graph, mut layers, [real, dummy, v]) = build();
+    create_vertical_alignments(&mut graph, &mut layers, MedianOrder::EdgeOrder);
+    assert_eq!(graph[v].root, real);
+    assert_eq!(graph[dummy].align, dummy);
+
+    // the option reaches the alignment passes of create_layouts: in the
+    // Down/Right layout v sits below the median that was tried first, while
+    // in the Down/Left layout the dummy comes first in either mode
+    for (median_order, expected) in [
+        (MedianOrder::PreferDummy, dummy),
+        (MedianOrder::EdgeOrder, real),
+    ] {
+        let (mut graph, mut layers, [real, dummy, v]) = build();
+        let layouts = super::create_layouts(&mut graph, &mut layers, None, median_order);
+        assert_ne!(layouts[0][&real], layouts[0][&dummy]);
+        assert_ne!(layouts[1][&real], layouts[1][&dummy]);
+        assert_eq!(layouts[0][&v], layouts[0][&expected]);
+        assert_eq!(layouts[1][&v], layouts[1][&dummy]);
+    }
 }

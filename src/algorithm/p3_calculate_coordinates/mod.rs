@@ -15,9 +15,11 @@
 //! This implementation deviates from the paper in two ways: vertex
 //! separation respects individual vertex widths (either per alignment block
 //! or, with [`crate::configure::Config::per_pair_separation`], per pair of
-//! adjacent vertices plus an explicit vertex/edge gap), and when exactly one
-//! of two distinct median neighbors is a dummy vertex, alignment prefers the
-//! dummy so long edges stay straight.
+//! adjacent vertices plus an explicit vertex/edge gap), and by default, when
+//! exactly one of two distinct median neighbors is a dummy vertex, alignment
+//! prefers the dummy so long edges stay straight. The latter deviation can be
+//! turned off with [`MedianOrder::EdgeOrder`], which always tries the two
+//! median neighbors in edge order, as the paper does.
 
 #[cfg(test)]
 mod tests;
@@ -48,6 +50,11 @@ use crate::configure::PairSeparation;
 /// widths of their alignment blocks; see
 /// [`crate::configure::Config::per_pair_separation`].
 ///
+/// `median_order` selects which of a vertex's two median neighbors vertical
+/// alignment tries first; see [`MedianOrder`]. Pass
+/// [`MedianOrder::default()`] to prefer dummy vertices, or
+/// [`MedianOrder::EdgeOrder`] to always try the medians in edge order.
+///
 /// # Panics
 ///
 /// Panics (with an index out of bounds) if a layer is empty — note that
@@ -58,6 +65,7 @@ pub fn create_layouts(
     graph: &mut StableDiGraph<Vertex, Edge>,
     layers: &mut [Vec<NodeIndex>],
     per_pair_separation: Option<PairSeparation>,
+    median_order: MedianOrder,
 ) -> Vec<HashMap<NodeIndex, f64>> {
     info!(target: "coordinate_calculation", "Creating individual layouts for coordinate calculation");
     let mut layouts = Vec::new();
@@ -75,7 +83,7 @@ pub fn create_layouts(
                 h_dir);
 
             reset_alignment(graph, layers);
-            create_vertical_alignments(graph, layers);
+            create_vertical_alignments(graph, layers, median_order);
             let mut layout = do_horizontal_compaction(graph, layers, per_pair_separation);
             // flip x_coordinates if we went from right to left
             if let HDir::Left = h_dir {
@@ -279,10 +287,12 @@ pub(super) fn reset_alignment(graph: &mut StableDiGraph<Vertex, Edge>, layers: &
 
 // TODO: Change this so the graph gets rotated outside of the function
 /// Aligns the graph in so called blocks, which are used in the next step
-/// to determine the x-coordinate of a vertex.
+/// to determine the x-coordinate of a vertex. `median_order` selects which
+/// of a vertex's two median neighbors is tried first.
 fn create_vertical_alignments(
     graph: &mut StableDiGraph<Vertex, Edge>,
     layers: &mut [Vec<NodeIndex>],
+    median_order: MedianOrder,
 ) {
     info!(target: "coordinate_calculation", "Creating vertical alignments");
     for layer in layers {
@@ -306,8 +316,13 @@ fn create_vertical_alignments(
 
             // when exactly one of two distinct median neighbors is a dummy,
             // prefer aligning with the dummy so long edges stay straight
+            // (unless the caller asked for the medians in edge order)
             let [lo, hi] = lower_upper_median;
-            if lo != hi && graph[edges[hi].1].is_dummy && !graph[edges[lo].1].is_dummy {
+            if median_order == MedianOrder::PreferDummy
+                && lo != hi
+                && graph[edges[hi].1].is_dummy
+                && !graph[edges[lo].1].is_dummy
+            {
                 lower_upper_median = [hi, lo];
             }
 
@@ -521,6 +536,32 @@ fn place_block(
 // the vertex immediately left of the given vertex within its layer
 fn pred(vertex: Vertex, layers: &[Vec<NodeIndex>]) -> NodeIndex {
     layers[vertex.rank as usize][vertex.pos - 1]
+}
+
+/// The order in which vertical alignment tries the two median neighbors of
+/// a vertex with an even number of edges to the adjacent layer (with an odd
+/// number there is a single median, and the order is irrelevant). Only
+/// edges spanning exactly one rank are counted, and parallel edges count
+/// individually, so both medians can be the same neighbor — in which case
+/// the order is irrelevant as well.
+///
+/// A vertex is aligned with the first median neighbor that is eligible —
+/// the connecting edge has no type 1 conflict and the alignment would not
+/// cross an earlier one — so the order decides which of the two wins when
+/// both are eligible.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MedianOrder {
+    /// When exactly one of the two median neighbors is a dummy vertex, try
+    /// the dummy first, so long edges stay straight; otherwise behave like
+    /// [`Self::EdgeOrder`]. This is the default.
+    #[default]
+    PreferDummy,
+    /// Always try the two median neighbors in edge order — the order of the
+    /// vertex's edges to the adjacent layer, sorted by the position of the
+    /// neighbor in the direction of the pass, so the median nearer the
+    /// side the pass starts from comes first — regardless of whether either
+    /// is a dummy vertex. This is the behavior described in the paper.
+    EdgeOrder,
 }
 
 /// The horizontal direction in which a Brandes-Köpf alignment pass runs.
